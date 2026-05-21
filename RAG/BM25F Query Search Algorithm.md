@@ -1,91 +1,52 @@
-# BM25 Explained: The Classic Algorithm that Still Powers Search Today
+# BM25F: Extension of Okapi BM25 for Structured Text Retrieval
 
-*Written by Zawanah | Oct 3, 2025*
+BM25F (Best Matching 25 with Fields) is an extension of the classic Okapi BM25 ranking algorithm designed specifically for structured documents containing multiple text fields (e.g., `Title`, `Body`, `Keywords`, `URL`). 
 
-Before today’s AI-driven world of semantic search and embeddings, search engines had to rely on something much simpler: keywords.
-
-And yet, even back then, search could feel surprisingly smart. I can type *“best restaurants near Clementi”* and instantly get pages that look highly relevant — without a single neural network involved.
-
-The secret behind that “smarts” is an algorithm called **BM25**.
-
-Born in the 1990s, it’s a ranking function that evaluates how well documents match your query based on keyword frequency, rarity, and document length.
-
-Despite being decades old, BM25 hasn’t gone away. BM25 remains popular due to its speed, transparency, robust results, and ease of implementation. Many current search frameworks let users mix BM25 with neural and embedding-based methods for improved search accuracy and relevance.
-
-In this article, we’ll break down what BM25 is, how it works (without drowning you in math), and why it remains a critical part of modern search — even in the age of embeddings.
+While standard BM25 treats a document as a single, homogenous flat string of text, **BM25F recognizes that a keyword match in a document's title is often far more valuable than a keyword match buried deep in its body text.**
 
 ---
 
-## What Is BM25?
+## 💡 The Core Problem it Solves
 
-At its core, BM25 is a ranking algorithm for keyword-based search. When you type in a query like *"wireless noise-cancelling headphones"*, the search engine has to decide which listings to show you first.
+If you naively run independent standard BM25 calculations on separate fields and add the scores together, you create two fatal flaws:
+1. **The Double-Saturation Flaw:** If a keyword appears 3 times in the title and 10 times in the body, separate BM25 pipelines apply the term frequency saturation curve *twice*. This distorts the document's true relevance.
+2. **Global Statistic Mismatch:** Standard BM25 relies on collection-wide document lengths. Calculating it across distinct attributes causes short fields (like a 5-word title) to heavily penalize slightly longer entries arbitrarily.
 
-BM25 does this by scoring documents (in this case, product listings) based on three main factors:
-
-### 1. Term Frequency (TF)
-*How many times does the keyword appear in the product listing?*
-* **Product A**: Mentions “noise-cancelling” 5 times in the title, features, reviews.
-* **Product B**: Mentions “noise-cancelling” once at the bottom of the description.
-
-BM25 gives **Product A** a higher score because repeated mentions suggest the feature is central to the item, not an afterthought.
-
-### 2. Inverse Document Frequency (IDF)
-*How rare is the keyword across all documents?*
-If nearly every product listing mentions “wireless,” that word carries less weight than “noise-cancelling,” which might appear in fewer product listings.
-* Keyword **“wireless”** appears in 80% of headphones listings (too common, low IDF weight).
-* Keyword **“noise-cancelling”** appears in only 20% of listings (rarer, high IDF weight).
-
-BM25 assigns more weight to “noise-cancelling” since it helps separate relevant products from the crowd.
-
-### 3. Document Length Normalization
-*Shorter descriptions that match your query are often more relevant than overly long ones stuffed with keywords.*
-* **Product C**: Short, focused description — *“Wireless Noise-Cancelling Headphones with 20h battery life”*.
-* **Product D**: Long description stuffed with generic marketing terms — *“Experience amazing sound quality, top comfort, perfect for fitness, gaming, travel, office use, lifestyle upgrade, and more. Features include Bluetooth 5.0, ergonomic design, and basic noise-cancelling technology.”* with only one small mention of “noise-cancelling.”
-
-Although both contain the keywords, BM25 ranks **Product C** higher, because shorter, focused descriptions are usually more relevant.
+**The BM25F Solution:** Instead of calculating multiple BM25 scores and blending them, BM25F calculates a single **effective, length-normalized term frequency** across all fields *before* applying the non-linear saturation curve and the final scoring logic.
 
 ---
 
-## BM25 vs Semantic Search
+## 🧮 The Mathematics of BM25F
 
-How does BM25 compare to semantic search?
+Given a query $Q$ with terms $q_1, q_2, \dots, q_n$, the total relevance score for a document $D$ is given by:
 
-![BM25 vs Semantic Search](bm25_vs_semantic.png)
-*BM25 compared with Semantic Search. Infographic generated to visualize the comparison.*
+$$\text{Score}_{\text{BM25F}}(D, Q) = \sum_{i=1}^{n} \text{IDF}(q_i) \cdot \frac{\tilde{f}(q_i, D)}{\tilde{f}(q_i, D) + k_1}$$
 
-* **BM25 is keyword-based**: It ranks results by how often your exact words appear, how rare those words are, and how focused the document is. It’s fast, lightweight, and easy to interpret. If you search Shopee for *“wireless noise-cancelling headphones”*, BM25 ensures listings with those exact terms rise to the top.
-* **Semantic Search is meaning-based**: Instead of only matching words, it uses vector embeddings to capture context and intent. For example, if you search for *“headphones to block background noise”*, semantic search can still find *“noise-cancelling headphones”* — even though you didn’t use the exact phrase.
+Where the structural adjustments happen inside $\tilde{f}(q_i, D)$, the **effective term frequency**:
 
-Neither approach is perfect on its own. That’s why modern search systems often combine both.
+$$\tilde{f}(q_i, D) = \sum_{c \in \text{Fields}} w_c \cdot \frac{f(q_i, D_c)}{1 - b_c + b_c \cdot \frac{|D_c|}{\text{avgdl}_c}}$$
 
----
-
-## Why BM25 Still Matters Amidst Semantic Search
-
-Why even care about BM25? Isn’t it outdated? Not at all.
-
-BM25 still powers a huge portion of keyword-based search engines today because it’s fast, simple, and effective for exact word matching. When the query is very obvious — like typing *“wireless noise-cancelling headphones”* — BM25 shines.
-
-It doesn’t need deep learning to understand embeddings; it just needs to rank results based on the keywords you typed, how rare they are, and how focused the document is.
-
-For smaller datasets or applications where keywords matter more than context — such as internal knowledge bases, FAQ lookups, or product catalogs — BM25 can outperform more complex AI systems. It’s also much easier and cheaper to implement, which makes it a practical choice for many real-world systems.
-
-Simply put, BM25 is the reliable workhorse of search. While Approximate Nearest Neighbor (ANN) and semantic methods are great at capturing meaning, BM25 ensures that when you say “noise-cancelling,” you actually get products with noise-cancelling — not just “great sound quality.”
+### Term Definitions:
+*   $f(q_i, D_c)$: The raw count of query term $q_i$ in field $c$ of the document.
+*   $w_c$: The **Field Weight** (e.g., you might assign `w_title = 3.0` and `w_body = 1.0`).
+*   $|D_c|$: The length of field $c$ in the current document.
+*   $\text{avgdl}_c$: The average length of field $c$ across the entire collection of documents.
+*   $b_c$: The field-specific **length normalization penalty** (typically tuned between `0.0` and `1.0`).
+*   $k_1$: The global **scaling/saturation parameter** (usually set between `1.2` and `2.0`).
+*   $\text{IDF}(q_i)$: The standard Inverse Document Frequency computed across the entire corpus.
 
 ---
 
-## Conclusion
+## ⚙️ Key Hyperparameters
 
-BM25 and semantic search are tools built for different strengths:
-* **BM25** guarantees exact keyword precision.
-* **Semantic search** unlocks context and meaning.
+| Parameter | Recommended Scope | What it Controls |
+| :--- | :--- | :--- |
+| **$w_c$** | Variable ($1.0 \to 5.0+$) | The structural importance of a field. Higher weights make matches in this specific field heavily influence results. |
+| **$b_c$** | $0.0 \to 1.0$ | Field-level length normalization. For fields where length shouldn't matter (like an alphanumeric SKU identifier), set to `0`. For verbose content like abstracts or descriptions, set closer to `0.75`. |
+| **$k_1$** | $1.2 \to 2.0$ | Controls term frequency saturation. Determines how quickly the score hits a point of diminishing returns for repetitive text. |
 
-The choice comes down to what matters most for your use case. If you’re running a small product catalog or FAQ system, BM25 might be all you need. But if you’re building production-scale apps like search engines, chatbots, or recommendation systems, semantic search — often powered by ANN — becomes essential.
+---
 
-In practice, the most powerful systems don’t choose one or the other. **They go hybrid**, using BM25 to ground the results in exact matches while semantic search fills in the gaps for synonyms and context. That’s why platforms like Elasticsearch, Vespa, and Weaviate lean on both.
+## 🗺️ How BM25F Fits into Modern Hybrid RAG Systems
 
-> "BM25 guarantees correctness, semantic search guarantees understanding — the best results often come when you combine them."
-
-### References
-1. *“BM25: How it works and why is it so effective”*, Elastic Blog, 2024
-2. *“BM25 vs. neural embeddings in modern search”*, Search Engine Land, 2024
+In production retrieval pipelines (using frameworks like Elasticsearch, OpenSearch, Vespa, or Weaviate), BM25F serves as the **structured lexical anchor**.
