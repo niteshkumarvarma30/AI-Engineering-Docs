@@ -1,52 +1,82 @@
-# BM25F: Extension of Okapi BM25 for Structured Text Retrieval
+# What is BM25?
 
-BM25F (Best Matching 25 with Fields) is an extension of the classic Okapi BM25 ranking algorithm designed specifically for structured documents containing multiple text fields (e.g., `Title`, `Body`, `Keywords`, `URL`). 
+Okapi BM25 is a ranking function used in search engines to score documents by relevance to a query. The "BM" is short for *best matching*, and 25 is the version of the function that worked best in testing. It improves on earlier methods like TF-IDF by accounting for document length and diminishing returns from repeated terms. It powers Apache Lucene-based search systems like Elasticsearch and Solr, and Tantivy-based search systems like ParadeDB.
 
-While standard BM25 treats a document as a single, homogenous flat string of text, **BM25F recognizes that a keyword match in a document's title is often far more valuable than a keyword match buried deep in its body text.**
-
----
-
-## 💡 The Core Problem it Solves
-
-If you naively run independent standard BM25 calculations on separate fields and add the scores together, you create two fatal flaws:
-1. **The Double-Saturation Flaw:** If a keyword appears 3 times in the title and 10 times in the body, separate BM25 pipelines apply the term frequency saturation curve *twice*. This distorts the document's true relevance.
-2. **Global Statistic Mismatch:** Standard BM25 relies on collection-wide document lengths. Calculating it across distinct attributes causes short fields (like a 5-word title) to heavily penalize slightly longer entries arbitrarily.
-
-**The BM25F Solution:** Instead of calculating multiple BM25 scores and blending them, BM25F calculates a single **effective, length-normalized term frequency** across all fields *before* applying the non-linear saturation curve and the final scoring logic.
+Even though it's over 30 years old, BM25 remains the default ranking algorithm in most search engines because it’s simple, explainable, and performs well in practice.
 
 ---
 
-## 🧮 The Mathematics of BM25F
+## How BM25 Works
 
-Given a query $Q$ with terms $q_1, q_2, \dots, q_n$, the total relevance score for a document $D$ is given by:
+It's important to note that BM25 is what’s known as a **bag-of-words** retrieval function. It doesn’t look at term order, phrase structure, or proximity: only at which words appear and how frequently they occur.
 
-$$\text{Score}_{\text{BM25F}}(D, Q) = \sum_{i=1}^{n} \text{IDF}(q_i) \cdot \frac{\tilde{f}(q_i, D)}{\tilde{f}(q_i, D) + k_1}$$
+BM25 starts by breaking the search query into individual terms. For each term, it scores how well every document matches based on three main signals:
 
-Where the structural adjustments happen inside $\tilde{f}(q_i, D)$, the **effective term frequency**:
+1. **Term frequency (TF)**: documents that mention a query term more often score higher.
+2. **Inverse document frequency (IDF)**: rare terms are weighted more than common ones.
+3. **Document length normalization**: shorter documents are preferred to long ones that mention the term in passing.
 
-$$\tilde{f}(q_i, D) = \sum_{c \in \text{Fields}} w_c \cdot \frac{f(q_i, D_c)}{1 - b_c + b_c \cdot \frac{|D_c|}{\text{avgdl}_c}}$$
+Each term contributes its own score, and BM25 sums those scores to produce an overall relevance value for the document.
 
-### Term Definitions:
-*   $f(q_i, D_c)$: The raw count of query term $q_i$ in field $c$ of the document.
-*   $w_c$: The **Field Weight** (e.g., you might assign `w_title = 3.0` and `w_body = 1.0`).
-*   $|D_c|$: The length of field $c$ in the current document.
-*   $\text{avgdl}_c$: The average length of field $c$ across the entire collection of documents.
-*   $b_c$: The field-specific **length normalization penalty** (typically tuned between `0.0` and `1.0`).
-*   $k_1$: The global **scaling/saturation parameter** (usually set between `1.2` and `2.0`).
-*   $\text{IDF}(q_i)$: The standard Inverse Document Frequency computed across the entire corpus.
+In simplified form, BM25 can be thought of as:
 
----
+$$\text{Score} = \sum \text{IDF} \times \text{adjusted\_term\_frequency}$$
 
-## ⚙️ Key Hyperparameters
+where the adjusted term frequency reduces the impact of very frequent terms and normalizes for document length.
 
-| Parameter | Recommended Scope | What it Controls |
-| :--- | :--- | :--- |
-| **$w_c$** | Variable ($1.0 \to 5.0+$) | The structural importance of a field. Higher weights make matches in this specific field heavily influence results. |
-| **$b_c$** | $0.0 \to 1.0$ | Field-level length normalization. For fields where length shouldn't matter (like an alphanumeric SKU identifier), set to `0`. For verbose content like abstracts or descriptions, set closer to `0.75`. |
-| **$k_1$** | $1.2 \to 2.0$ | Controls term frequency saturation. Determines how quickly the score hits a point of diminishing returns for repetitive text. |
+The full BM25 formula is slightly more complex. It includes tunable parameters:
+*   **$k_1$**: how quickly term frequency saturates.
+*   **$b$**: how strongly document length is normalized.
+
+These controls make BM25 adaptable across different datasets and document types.
 
 ---
 
-## 🗺️ How BM25F Fits into Modern Hybrid RAG Systems
+## Why BM25 Works Well
 
-In production retrieval pipelines (using frameworks like Elasticsearch, OpenSearch, Vespa, or Weaviate), BM25F serves as the **structured lexical anchor**.
+BM25 has three key strengths which have allowed it to stay relevant for so long:
+*   **Simplicity**: Easy to understand and implement.
+*   **Efficiency**: Fast enough to run in real-time over large datasets.
+*   **Explainability**: Each part of the score can be traced to a clear factor.
+
+Because of these traits, BM25 remains the baseline for relevance in modern search systems.
+
+---
+
+## When to Use BM25
+
+BM25 excels in retrieval workloads where specific keywords carry significant information. For example:
+*   Searching for a brand name in a product catalog
+*   Looking up a stock ticker in a trading app
+*   Matching a merchant name in a credit card transaction ledger
+*   Finding names in a legal document
+*   Finding a diagnosis code in a medical report
+*   Retrieving files to feed into an LLM in a RAG application
+
+Because BM25 relies on simple term statistics, it is accurate, consistent, and extremely fast. That makes it a popular choice in applications where low query latency and keyword relevance are critical.
+
+---
+
+## Example: Scoring a Query with BM25
+
+Imagine a user searches for *"inverted index"*. 
+
+BM25 first breaks the query into two terms: **“inverted”** and **“index”**. Then, for each document, it scores how well those terms match:
+
+| Document | Length | Term counts | TF–IDF signals | Relative Score |
+| :--- | :--- | :--- | :--- | :--- |
+| **Doc A** | 60 words | `inverted: 1`<br>`index: 1` | rare $\to$ high IDF<br>common $\to$ low IDF | **Higher** |
+| **Doc B** | 200 words | `inverted: 1`<br>`index: 10` | rare $\to$ high IDF<br>common $\to$ low IDF<br>+ length penalty | **Lower** |
+
+Even though **Doc B** repeats “index” more times, BM25 favors **Doc A** because:
+1. **“inverted”** is a rare term with higher IDF.
+2. Both documents mention it once (similar TF).
+3. **Doc A** is shorter, so its matches are more concentrated.
+
+BM25 rewards focused, relevant mentions of rare terms, not repetition in long text.
+
+---
+
+## Summary
+
+BM25 remains the standard ranking algorithm for keyword search. It combines frequency, rarity, and length normalization into a single scoring model that quickly produces balanced and predictable results. It is the foundation that modern lexical hybrid search systems continue to build on.
