@@ -7,7 +7,7 @@ Welcome to my personal knowledge repository for **AI Engineering**. This reposit
 Here is an overview of the topics covered in this repository:
 
 - 🧠 **Large Language Models (LLMs)**: Architecture, embeddings, context windows, and tokenization.
-- ✍️ **Prompt Engineering**: System prompts, zero-shot/few-shot learning, Chain of Thought (CoT), ReAct pattern.
+- ✍️ **Prompt Engineering**: [Verbalized Sampling (VS)](file:///c:/AI/AI-Engineering-Docs/Prompt%20Engineering/Verbalized%20Sampling%20%28VS%29.md), system prompts, zero-shot/few-shot learning, Chain of Thought (CoT), ReAct pattern.
 - 🔍 **Retrieval-Augmented Generation (RAG)**: [BM25F Query Search Algorithm](file:///c:/AI/AI-Engineering-Docs/RAG/BM25F%20Query%20Search%20Algorithm.md), document loaders, text splitters, vector databases, search/retrieval strategies, and re-ranking.
 - 🤖 **Agentic Workflows**: Tool use, function calling, state management, and multi-agent frameworks (LangGraph, Autogen, CrewAI).
 - ⚙️ **Fine-Tuning & Quantization**: LoRA, QLoRA, model evaluation, and optimization.
