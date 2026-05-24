@@ -11,7 +11,7 @@ Here is an overview of the topics covered in this repository:
 - 🔍 **Retrieval-Augmented Generation (RAG)**: [BM25F Query Search Algorithm](file:///c:/AI/AI-Engineering-Docs/RAG/BM25F%20Query%20Search%20Algorithm.md), [Keyword-Augmented Retrieval (KAR)](file:///c:/AI/AI-Engineering-Docs/RAG/Keyword%20Augmented%20Retrieval.md), document loaders, text splitters, vector databases, search/retrieval strategies, and re-ranking.
 - 🤖 **Agentic Workflows**: [MCP Introduction](file:///c:/AI/AI-Engineering-Docs/MCP/MCP%20Introduction.md), [MCP and A2A Interoperability](file:///c:/AI/AI-Engineering-Docs/MCP/MCP%20and%20A2A.md), tool use, function calling, state management, and multi-agent frameworks (LangGraph, Autogen, CrewAI).
 - 🦜 **LangChain**: [Indexes in LangChain](file:///c:/AI/AI-Engineering-Docs/LangChain/Indexes-In-LangChain.md), [LangChain Runnables](file:///c:/AI/AI-Engineering-Docs/LangChain/Runnables.md), [LangChain Expression Language (LCEL)](file:///c:/AI/AI-Engineering-Docs/LangChain/LCEL.md), chains, agents, memory.
-- ⚙️ **Fine-Tuning & Quantization**: LoRA, QLoRA, model evaluation, and optimization.
+- ⚙️ **Fine-Tuning & Quantization**: [Role of Data Diversity and Mixed Training in Fine-Tuning](file:///c:/AI/AI-Engineering-Docs/Fine-Tuning/conclusion%20from%20Paper%20When%20Fine-Tuning%20Fails%20and%20when%20it%20Generalises%20-%20Role%20of%20Data%20Diversity%20and%20Mixed%20Training%20in%20LLM-based%20TTS.md), LoRA, QLoRA, model evaluation, and optimization.
 - 📦 **MLOps & Deployment**: API serving (FastAPI, Ollama), model registry, monitoring, and scaling.
 
 ---
