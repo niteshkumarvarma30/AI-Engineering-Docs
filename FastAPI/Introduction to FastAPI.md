@@ -395,7 +395,7 @@ graph TD
     RateLimit -->|Valid| CORS[CORS Middleware<br/>Validates Domain Cross-Origin]
     CORS -->|Approved| Router[FastAPI Router<br/>Reads global Lifespan models]
     
-    subgraph FastAPI Lifespan (Pre-loaded VRAM)
+    subgraph "FastAPI Lifespan (Pre-loaded VRAM)"
         ModelWeights[ML Model Weights loaded once at startup]
     end
     
