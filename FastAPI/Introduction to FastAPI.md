@@ -218,3 +218,203 @@ async def hello(
 
 > [!IMPORTANT]
 > The ellipsis (`...`) used inside the validator (e.g. `Path(...)` or `Query(...)`) indicates that the parameter is **required** and cannot be omitted by the client. The prepended asterisk (`*`) in the function arguments tells Python that all subsequent arguments must be passed as keyword arguments.
+
+---
+
+## ⏳ 8. Background Tasks (Asynchronous Processing)
+
+Machine learning model inference (especially Large Language Models, high-dimensional embeddings, or image generation pipelines) can take several seconds to minutes to compute. Blocking a standard HTTP connection while waiting for inference to finish can lead to gateway timeouts (e.g., `504 Gateway Timeout`) and exhaust your server's connection pool.
+
+### How it Works
+Instead of making the client wait, FastAPI allows you to return an immediate `200 OK` response containing a confirmation or a "Task ID", while delegating the heavy machine learning computation to FastAPI's built-in `BackgroundTasks` engine to run out-of-band.
+
+```python
+from fastapi import FastAPI, BackgroundTasks
+
+app = FastAPI()
+
+def run_ai_inference(prompt: str):
+    # Heavy LLM initialization and token generation runs here
+    # Results can be persisted directly to a database
+    pass
+
+@app.post("/generate")
+async def generate_text(prompt: str, background_tasks: BackgroundTasks):
+    # Delegate the heavy task to the background executor
+    background_tasks.add_task(run_ai_inference, prompt)
+    
+    # Return an immediate response to keep the web layer free
+    return {
+        "status": "Processing initiated", 
+        "message": "The AI model is processing your prompt. Results will be saved to the database."
+    }
+```
+
+> [!NOTE]
+> **Production Scaling Tip**: FastAPI's built-in `BackgroundTasks` runs inside the same process using an async event loop or a thread pool. For high-scale enterprise environments, you should transition this pattern to dedicated distributed task queues like **Celery** or **Dramatiq** backed by **Redis** or **RabbitMQ**. This keeps your web nodes completely lightweight.
+
+---
+
+## 🧠 9. Advanced Dependency Injection: Lifespan Events
+
+In an AI application, loading deep learning weights (such as a 7B parameter LLM, a PyTorch model, or a Hugging Face pipeline) into memory (RAM/VRAM) is extremely resource-intensive. **You absolutely cannot load the model weights inside your endpoint router function on every incoming request.**
+
+### The Lifespan Context Manager
+FastAPI provides a modern `lifespan` hook. This context manager allows you to:
+1. Load your machine learning models **once** during server startup.
+2. Store them globally in memory so they are shared across all requests.
+3. Clean up memory and release GPU VRAM when the server shuts down.
+
+```python
+from contextlib import asynccontextmanager
+from fastapi import FastAPI
+
+# Global dictionary to hold model references in memory
+ml_models = {}
+
+def fake_load_heavy_model_weights():
+    # Simulate loading model weights into VRAM
+    return "Loaded PyTorch Model Weights"
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # --- Startup phase ---
+    # Load the heavy ML model weights when the server boots up
+    ml_models["llm_model"] = fake_load_heavy_model_weights()
+    yield
+    # --- Shutdown phase ---
+    # Clean up resources and release VRAM when the server stops
+    ml_models.clear()
+
+# Initialize FastAPI with the lifespan context manager
+app = FastAPI(lifespan=lifespan)
+```
+
+---
+
+## 🌊 10. Streaming Responses (For LLMs)
+
+When building conversational AI interfaces (similar to ChatGPT), waiting for a long sequence (e.g., a 500-word response) to generate completely before returning a response creates significant latency and a poor user experience.
+
+### The StreamingResponse Abstraction
+By combining Python generators (`yield`) with FastAPI's `StreamingResponse`, you can stream individual output tokens chunk-by-chunk to the frontend in real-time using standard **Server-Sent Events (SSE)**.
+
+```python
+import asyncio
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+
+app = FastAPI()
+
+async def token_generator():
+    tokens = ["AI ", "applications ", "require ", "real-time ", "streaming ", "responses! "]
+    for token in tokens:
+        yield token
+        await asyncio.sleep(0.2)  # Simulating GPU/model token-generation latency
+
+@app.get("/stream-chat")
+async def stream_chat():
+    # Return a stream using the standard SSE content type
+    return StreamingResponse(token_generator(), media_type="text/event-stream")
+```
+
+---
+
+## 🛡️ 11. Middlewares & Rate Limiting
+
+Serving deep learning models on GPUs is highly expensive. To protect your underlying infrastructure from malicious clients, scraping bots, or accidental resource starvation, you must implement defensive layers.
+
+### 🚪 Rate Limiting
+Implementing rate-limiting middlewares helps track incoming client requests by their IP address or API token. If a client exceeds a configured threshold (e.g., 5 requests per minute), FastAPI intercepts the request early and returns an `HTTP 429 Too Many Requests` error before the workload hits your GPU pipeline.
+
+### 🌐 Cross-Origin Resource Sharing (CORS) Middleware
+CORS middleware is critical when your frontend client application (e.g., React, Vue, Next.js) is hosted on a different domain than your backend FastAPI service. It governs which origins are allowed to make cross-site HTTP requests.
+
+```python
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI()
+
+# Configure origins allowed to access the API
+origins = [
+    "http://localhost:3000",
+    "https://my-ai-app.com",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+```
+
+---
+
+## 🚨 12. Structured Error Handling & Global Exceptions
+
+When an AI application experiences a runtime failure (such as a vector database timeout, database disconnect, or a shape mismatch during token embedding), returning a raw Python stack trace to the client is a security risk and results in an unprofessional user experience.
+
+### Custom Exception Handlers
+You can register global exception handlers that intercept specific backend exceptions, capture the error metadata, log it internally, and format a clean, standardized JSON error response for the client app.
+
+```python
+from fastapi import FastAPI, Request, status
+from fastapi.responses import JSONResponse
+
+app = FastAPI()
+
+# Custom exception class
+class VectorDBConnectionError(Exception):
+    def __init__(self, name: str):
+        self.name = name
+
+# Global exception handler registration
+@app.exception_handler(VectorDBConnectionError)
+async def vector_db_exception_handler(request: Request, exc: VectorDBConnectionError):
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={
+            "error": "VectorDatabaseUnavailable",
+            "message": f"Could not establish connection to Vector Database: {exc.name}. Please retry shortly.",
+        },
+    )
+```
+
+---
+
+## 📊 13. Summary: The Production-Grade AI Stack
+
+To understand how these components interlock in a production architecture, consider this high-scale request pipeline:
+
+```mermaid
+graph TD
+    Client[Client Request] -->|1. Hits Middleware| RateLimit[Rate Limiter Middleware<br/>Checks IP / Token]
+    RateLimit -->|Valid| CORS[CORS Middleware<br/>Validates Domain Cross-Origin]
+    CORS -->|Approved| Router[FastAPI Router<br/>Reads global Lifespan models]
+    
+    subgraph FastAPI Lifespan (Pre-loaded VRAM)
+        ModelWeights[ML Model Weights loaded once at startup]
+    end
+    
+    Router -->|Option A: Short Task| Predict[Immediate Inference<br/>Returns JSON response]
+    Router -->|Option B: Heavy Background Task| BgTask[BackgroundTasks.add_task<br/>Returns 200 OK + JobID immediately]
+    Router -->|Option C: LLM / Chat Generation| Stream[StreamingResponse<br/>Yields chunk-by-chunk tokens via SSE]
+    
+    Predict -.-> ErrorHandler[Global Exception Handler<br/>Catches DB / VRAM mismatch, returns clean JSON]
+    BgTask -.-> ErrorHandler
+    Stream -.-> ErrorHandler
+    
+    classDef default fill:#1e293b,stroke:#475569,stroke-width:1px,color:#f8fafc;
+    classDef client fill:#1e1b4b,stroke:#4f46e5,stroke-width:2px,color:#e0e7ff;
+    classDef middleware fill:#7c2d12,stroke:#ea580c,stroke-width:2px,color:#fff7ed;
+    classDef lifespan fill:#1e293b,stroke:#a855f7,stroke-width:2px,color:#f3e8ff;
+    
+    class Client client;
+    class RateLimit,CORS middleware;
+    class ModelWeights lifespan;
+```
+
+By leveraging **Lifespan Context Managers** to handle large weights in memory, using **Background Tasks** and **Streaming Responses** to manage processing latencies, and securing the pipeline using **CORS** and **Rate Limiting** middlewares, you shift your FastAPI architecture from a simple prototype into an enterprise-ready machine learning platform.
