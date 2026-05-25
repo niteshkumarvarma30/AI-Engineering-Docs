@@ -95,7 +95,73 @@ if __name__ == "__main__":
 
 ---
 
-## 📖 4. Automatic Documentation (OpenAPI & ReDoc)
+## 🌐 4. The Core HTTP Verbs & CRUD Operations (POST, PUT, DELETE)
+
+In web development, `GET` is just one of several actions (called **HTTP Methods** or **HTTP Verbs**) that a client can perform on a URL. Modern frameworks like FastAPI use different methods to tell the server exactly what kind of operation you want to perform on a resource.
+
+The primary methods used alongside or instead of `GET` are `POST`, `PUT`, and `DELETE`.
+
+### A. POST (Create)
+While `GET` is used to fetch data from the server, `POST` is used to send new data to the server, typically to create a new resource (such as registering a user, placing an order, or uploading an AI prompt).
+
+*   **How it Works**: Data sent via a `POST` request is housed inside the **HTTP Request Body**. Unlike query parameters, this data is not visible in the browser's URL address bar, making it suitable for sensitive payloads and capable of handling complex nested schemas or binary files.
+
+```python
+from fastapi import FastAPI
+from pydantic import BaseModel
+
+app = FastAPI()
+
+class Item(BaseModel):
+    name: str
+    price: float
+
+# Using @app.post instead of @app.get
+@app.post("/items/")
+async def create_item(item: Item):
+    return {"message": "Item created successfully!", "data": item}
+```
+
+### B. PUT (Update)
+The `PUT` method is used to replace or update existing data on the server. Think of it as a complete **"edit/overwrite"** action.
+
+*   **How it Works**: You typically provide a path parameter (such as an ID) to target the specific resource you wish to modify, and then pass the updated representation of that object in the request body. If the resource exists, `PUT` replaces it entirely with the new payload.
+
+```python
+# Modifying a specific item using its ID as a path parameter
+@app.put("/items/{item_id}")
+async def update_item(item_id: int, updated_item: Item):
+    return {"message": f"Item {item_id} has been updated", "data": updated_item}
+```
+
+### C. DELETE (Remove)
+As the name implies, the `DELETE` method is used to remove a specific resource completely from the server database.
+
+*   **How it Works**: Similar to `PUT`, you pass a specific identifier (like a database ID or username) as a path parameter so the server knows exactly which record to erase. A `DELETE` operation usually does not require a request body, since you only need the address of what needs to be deleted.
+
+```python
+# Deleting a specific item using its ID as a path parameter
+@app.delete("/items/{item_id}")
+async def delete_item(item_id: int):
+    return {"message": f"Item {item_id} has been permanently deleted"}
+```
+
+### 📊 Summary Cheat Sheet (CRUD)
+In production application architectures, these methods map neatly onto an industry standard concept called **CRUD** (Create, Read, Update, Delete):
+
+| HTTP Method | CRUD Operation | Simple Analogy | Does it use a Request Body? |
+| :---: | :--- | :--- | :---: |
+| **GET** | **Read** (Fetch) | Opening and reading an online article. | **No** (Uses URL path/queries). |
+| **POST** | **Create** (Submit) | Submitting a filled-out sign-up or profile form. | **Yes** (Housed in request body). |
+| **PUT** | **Update** (Edit) | Editing a blog post or profile detail you already saved. | **Yes** (Contains the new version of data). |
+| **DELETE** | **Delete** (Remove) | Clicking a "Delete Account" button on a site profile. | **No** (Relies on the URL path ID). |
+
+> [!TIP]
+> When you build out your application using these different decorators (`@app.post`, `@app.put`, `@app.delete`), FastAPI automatically parses them and organizes your **Swagger UI interactive documentation page** into beautifully color-coded method blocks, making your API intuitively self-documenting for frontend teams and external users.
+
+---
+
+## 📖 5. Automatic Documentation (OpenAPI & ReDoc)
 
 One of FastAPI's most powerful native features is automatic schema generation. It reads your code and types, instantly providing two standard interactive API documentation interfaces:
 
@@ -107,7 +173,7 @@ One of FastAPI's most powerful native features is automatic schema generation. I
 
 ---
 
-## 🛡️ 5. Python Type Hints & Pydantic Validation
+## 🛡️ 6. Python Type Hints & Pydantic Validation
 
 FastAPI leverages standard Python **Type Hints** (introduced in Python 3.5+) to enforce robust runtime data validation, parsing, and type coercion.
 
@@ -135,7 +201,7 @@ class Student(BaseModel):
 
 ---
 
-## 🔗 6. Parameters: Path vs. Query vs. Request Body
+## 🔗 7. Parameters: Path vs. Query vs. Request Body
 
 When receiving parameters from a client, FastAPI distinguishes them based on how they are defined in your route path and signature:
 
@@ -189,7 +255,7 @@ async def student_data(s1: Student):
 
 ---
 
-## 🛠️ 7. Parameter Validation Using Operators
+## 🛠️ 8. Parameter Validation Using Operators
 
 You can enforce numeric and string constraints directly on path and query parameters by importing `Path` and `Query` from `fastapi`.
 
@@ -221,7 +287,7 @@ async def hello(
 
 ---
 
-## ⏳ 8. Background Tasks (Asynchronous Processing)
+## ⏳ 9. Background Tasks (Asynchronous Processing)
 
 Machine learning model inference (especially Large Language Models, high-dimensional embeddings, or image generation pipelines) can take several seconds to minutes to compute. Blocking a standard HTTP connection while waiting for inference to finish can lead to gateway timeouts (e.g., `504 Gateway Timeout`) and exhaust your server's connection pool.
 
@@ -255,7 +321,7 @@ async def generate_text(prompt: str, background_tasks: BackgroundTasks):
 
 ---
 
-## 🧠 9. Advanced Dependency Injection: Lifespan Events
+## 🧠 10. Advanced Dependency Injection: Lifespan Events
 
 In an AI application, loading deep learning weights (such as a 7B parameter LLM, a PyTorch model, or a Hugging Face pipeline) into memory (RAM/VRAM) is extremely resource-intensive. **You absolutely cannot load the model weights inside your endpoint router function on every incoming request.**
 
@@ -292,7 +358,7 @@ app = FastAPI(lifespan=lifespan)
 
 ---
 
-## 🌊 10. Streaming Responses (For LLMs)
+## 🌊 11. Streaming Responses (For LLMs)
 
 When building conversational AI interfaces (similar to ChatGPT), waiting for a long sequence (e.g., a 500-word response) to generate completely before returning a response creates significant latency and a poor user experience.
 
@@ -320,7 +386,7 @@ async def stream_chat():
 
 ---
 
-## 🛡️ 11. Middlewares & Rate Limiting
+## 🛡️ 12. Middlewares & Rate Limiting
 
 Serving deep learning models on GPUs is highly expensive. To protect your underlying infrastructure from malicious clients, scraping bots, or accidental resource starvation, you must implement defensive layers.
 
@@ -353,7 +419,7 @@ app.add_middleware(
 
 ---
 
-## 🚨 12. Structured Error Handling & Global Exceptions
+## 🚨 13. Structured Error Handling & Global Exceptions
 
 When an AI application experiences a runtime failure (such as a vector database timeout, database disconnect, or a shape mismatch during token embedding), returning a raw Python stack trace to the client is a security risk and results in an unprofessional user experience.
 
@@ -385,7 +451,7 @@ async def vector_db_exception_handler(request: Request, exc: VectorDBConnectionE
 
 ---
 
-## 📊 13. Summary: The Production-Grade AI Stack
+## 📊 14. Summary: The Production-Grade AI Stack
 
 To understand how these components interlock in a production architecture, consider this high-scale request pipeline:
 
