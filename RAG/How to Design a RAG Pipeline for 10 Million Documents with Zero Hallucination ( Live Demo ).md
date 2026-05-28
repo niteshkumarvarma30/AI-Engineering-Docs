@@ -265,15 +265,4 @@ Most developers spend weeks optimizing prompts and evaluating different LLMs, wh
 
 ---
 
-## 🌐 Live Browser-Native Demo
 
-You can interact with every single step of this production pipeline directly inside your browser. No servers, no backends: **100% Client-Side**.
-
-### [👉 Access the Interactive Advanced Local RAG Demo](https://niteshkumarvarma30.github.io/AI-Engineering-Docs/)
-
-#### What You Can Test In the Demo:
-*   **Hybrid Retrieval (Step 2)**: Upload your own files and adjust the vector-to-keyword weighting slider ($\alpha$) in real time to see how the fused results change.
-*   **Two-Stage Reranking (Step 3)**: Switch between proximity-based reranking and a real **Neural Cross-Encoder** (`MiniLM-L6`, 90MB) executing directly in-browser using WebAssembly and ONNX.
-*   **Threshold Gating (Step 4)**: Watch the composite confidence calculation score and see how it dynamically blocks low-confidence requests.
-*   **Post-Verification (Step 7)**: Intentionally feed conflicting or messy documents and watch the hallucination engine flag claims that lack context grounding.
-*   **Continuous Metrics (Step 8)**: Read live, locally computed eval scores for Context Relevance, Faithfulness, and Answer Relevance after every query.
