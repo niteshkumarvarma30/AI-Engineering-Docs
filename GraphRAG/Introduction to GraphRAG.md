@@ -23,7 +23,7 @@ When you chain thousands of these triples together, they form a vast, interconne
 ```mermaid
 graph LR
     subgraph "Triple 1"
-        FastAPI["FastAPI (Entity / Noun)"] -->|is_written_in (Predicate)| Python["Python (Entity / Noun)"]
+        FastAPI["FastAPI (Entity / Noun)"] -->|is_written_in| Python["Python (Entity / Noun)"]
     end
     subgraph "Triple 2"
         Python -->|was_created_by| Guido["Guido van Rossum (Entity)"]
