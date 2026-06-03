@@ -54,7 +54,31 @@ There are two main methods to execute this vector lookup:
 * **Strengths**: Blazing fast. It can search through millions or billions of vectors in a few milliseconds.
 * **Weaknesses**: May occasionally miss the absolute closest neighbor, trading a tiny fraction of accuracy for massive speed gains.
 
-### 3. Hybrid Search
+### 3. Mathematical Similarity Metrics Explained
+Once an algorithm identifies a candidate vector, it uses specific mathematical formulas to calculate and score the precise degree of proximity between the query point ($A$) and the document point ($B$).
+
+#### A. Cosine Similarity
+Cosine similarity isolates the directional angle between two vectors extending from the origin, completely ignoring the raw magnitude or physical length of the vectors.
+
+$$\text{Cosine Similarity}(A, B) = \frac{A \cdot B}{\|A\| \|B\|}$$
+
+* **Why it matters**: It evaluates conceptual matching rather than text length. For example, a short paragraph talking about machine learning and a massive 50-page thesis paper detailing machine learning will point in the exact same directional trajectory, yielding a high similarity score. It is the industry standard recommendation when working with text embedding models (such as OpenAI's embedding architectures).
+
+#### B. Dot Product (Inner Product)
+The Dot Product multiplies the individual matching coordinates of two vectors together and sums the total results.
+
+$$\text{Dot Product}(A, B) = \sum_{i=1}^{n} A_i B_i$$
+
+* **Why it matters**: Unlike Cosine, the Dot Product is sensitive to both the directional angle and the absolute length (magnitude) of the vectors. However, if your embedding vectors are normalized upfront (scaled so that every vector has an absolute mathematical length of exactly 1.0), the denominator of the Cosine formula becomes 1. This means the Dot Product yields the exact same directional ranking as Cosine, but executes significantly faster because the processor avoids running expensive square-root division operations on the fly.
+
+#### C. Euclidean Distance (L2 Norm)
+Euclidean distance measures the literal straight-line distance between two coordinate points sitting in an ordinary geometric space.
+
+$$\text{Euclidean Distance}(A, B) = \sqrt{\sum_{i=1}^{n} (A_i - B_i)^2}$$
+
+* **Why it matters**: It acts like a digital tape measure running between two explicit points. If two vectors point in the exact same direction but one is significantly longer than the other due to text volume differences, Euclidean distance will evaluate them as being far apart. It is highly optimized for datasets where the absolute scale or value frequency of individual dimensions carries critical meaning.
+
+### 4. Hybrid Search
 * **How it works**: To get the best of both worlds, engineers run both BM25 Keyword Search and Vector Semantic Search in parallel. This ensures the system retrieves documents containing exact keywords (like model serial numbers) and documents containing matching concepts (like synonyms and descriptions).
 
 ---
