@@ -220,3 +220,4 @@ Agents allow you to query different sources dynamically. Instead of building one
 ## 🔗 Links to read more :
 1) Link 1 : https://www.techment.com/blogs/rag-vs-knowledge-graphs-2026/
 2) Link 2 : https://www.puppygraph.com/blog/knowledge-graph-vs-rag
+3) Link 3 : https://www.useparagon.com/blog/vector-database-vs-knowledge-graphs-for-rag
