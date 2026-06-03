@@ -195,3 +195,7 @@ Knowledge Graphs are more expensive upfront due to data modeling and ontology de
 
 ### 4. What is the advantage of a hybrid model?
 A hybrid model (GraphRAG) allows the LLM to access the raw document library while using a conceptual map to understand how all the documents connect.
+
+##Links to read more :
+1) Link 1 : https://www.techment.com/blogs/rag-vs-knowledge-graphs-2026/
+2) Link 2 : https://www.puppygraph.com/blog/knowledge-graph-vs-rag
