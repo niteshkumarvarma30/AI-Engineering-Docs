@@ -75,3 +75,85 @@ branch = RunnableBranch(
 
 result = branch.invoke({"question": "What is 2+2?"}) # Routes to math_chain
 ```
+
+---
+
+## Part 2: Memory (State Management)
+
+Because LCEL chains are stateless, you must explicitly inject history. In production, you don't store chat history in RAM (it wipes when the server restarts). You store it in a database like Redis or Postgres.
+
+LangChain handles this via `RunnableWithMessageHistory`. It wraps your chain and automatically handles the database read/write operations before and after the LLM runs.
+
+```python
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_community.chat_message_histories import RedisChatMessageHistory
+
+# 1. Define how to fetch a specific user's chat session from the database
+def get_redis_history(session_id: str):
+    return RedisChatMessageHistory(session_id, url="redis://localhost:6379")
+
+# 2. Wrap your existing chain
+chain_with_memory = RunnableWithMessageHistory(
+    chain,
+    get_redis_history,
+    input_messages_key="user_input",
+    history_messages_key="chat_history" # Must match the MessagesPlaceholder in your prompt
+)
+
+# 3. Invoke with a specific Session ID
+chain_with_memory.invoke(
+    {"user_input": "Hi, my name is Alice."},
+    config={"configurable": {"session_id": "user_123"}}
+)
+```
+
+---
+
+## Part 3: LangChain CLI & LangServe (Deployment)
+
+Once you build your robust LCEL chain, how do you expose it to a frontend (like a React app)? You could write a FastAPI server from scratch, but writing endpoints that handle streaming Server-Sent Events (SSE) for LLMs is incredibly tedious.
+
+LangServe is LangChain's deployment solution. It automatically wraps your LCEL chains in production-ready FastAPI endpoints. The LangChain CLI is the tool used to scaffold these projects.
+
+### Step-by-Step Production Deployment
+
+#### 1. Scaffold the App via CLI
+Just like `npx create-react-app`, LangChain provides scaffolding. Open your terminal and run:
+
+```bash
+pip install langchain-cli
+langchain app new my-ai-api
+```
+This generates a full folder structure with a `server.py` file.
+
+#### 2. Add your Chain to LangServe
+Inside `server.py`, you define your chain and use `add_routes`.
+
+```python
+from fastapi import FastAPI
+from langserve import add_routes
+from my_custom_chain import chain # The chain you built in Part 1
+
+app = FastAPI(title="My LangChain Server")
+
+# LangServe automatically generates the REST API
+add_routes(
+    app,
+    chain,
+    path="/my-chain"
+)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="localhost", port=8000)
+```
+
+#### 3. What LangServe gives you for free:
+Once that server is running, LangServe automatically generates:
+
+* **POST `/my-chain/invoke`**: A standard endpoint that waits for the full response and returns JSON.
+* **POST `/my-chain/stream`**: An endpoint configured for Server-Sent Events (SSE). It streams tokens one by one to your frontend.
+* **POST `/my-chain/batch`**: Accepts an array of inputs and processes them concurrently.
+* **A Built-in UI (`/my-chain/playground`)**: LangServe generates a beautiful web interface where you can test your chain, view the intermediate steps, and tweak parameters without writing frontend code.
+
+By combining LCEL (for complex, parallelized data logic) with LangServe (for instant, streaming-ready REST APIs), you bypass hundreds of hours of boilerplate backend engineering.
