@@ -68,6 +68,7 @@ formatted_string = tokenizer.apply_chat_template(
 During SFT, the model takes the entire templated string as input and predicts the next token at every position.
 
 Recall the Cross-Entropy loss from Lesson 16:
+
 $$
 \mathcal{L} = -\sum_{t=1}^{T} \log P(y_t|x, y_{<t})
 $$
@@ -88,10 +89,11 @@ Labels:     [ -100,  -100, -100, -100, -100,  -100, -100, It, is, PEFT]
 ```
 
 When calculating loss:
+
 $$
 \text{Loss}_{t} = 
 \begin{cases} 
--\log P(y_t) & \text{if } y_t \neq -100 \\
+-\log P(y_t) & \text{if } y_t \neq -100 \\\\
 0 & \text{if } y_t = -100 
 \end{cases}
 $$

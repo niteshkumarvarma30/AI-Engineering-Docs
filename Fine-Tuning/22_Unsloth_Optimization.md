@@ -10,9 +10,11 @@ Hugging Face's `transformers` and `peft` libraries are designed for maximum comp
 
 Because of this broad compatibility, they are extremely slow and mathematically unoptimized.
 When you run a standard LoRA update:
+
 $$
 h = W_0 x + \Delta W x
 $$
+
 $$
 h = W_0 x + B A x
 $$

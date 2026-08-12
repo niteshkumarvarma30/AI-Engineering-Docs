@@ -48,6 +48,7 @@ The mathematical objective of Preference Tuning is relative:
 We define a **Reward Function** $r(x, y)$, where $x$ is the prompt and $y$ is the response.
 
 We want to train our model $\pi_\theta$ such that:
+
 $$
 r(x, y_{\text{chosen}}) > r(x, y_{\text{rejected}})
 $$
