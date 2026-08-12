@@ -4,17 +4,161 @@
 
 ---
 
-## 1. Preparing the Custom Dataset
+## 1. The Reality of Fine-Tuning
 
-The hardest part of fine-tuning is often data preparation.
-Suppose you have a custom dataset of customer support tickets in a raw `tickets.csv` or JSONL format.
+The hardest part of fine-tuning is rarely the training loop itself.
+
+When you look at modern AI repositories, the training loop is usually just a few lines of code.
+
+Modern libraries abstract away the complex math of backpropagation.
+
+They hide the complexity of gradient descent.
+
+They handle the heavy lifting of tensor operations.
+
+They manage the GPU memory allocation for you.
+
+Instead, the hardest part is almost always data preparation.
+
+You will spend most of your time formatting data.
+
+You will spend time cleaning data.
+
+You will spend time ensuring the tokenization aligns perfectly with your labels.
+
+You will spend time debugging off-by-one errors in your sequence lengths.
+
+This is the hidden reality of AI engineering.
+
+Data is the fuel that drives the entire neural network.
+
+If your data is formatted incorrectly, the model will learn incorrect behaviors.
+
+Suppose you work at a large technology company.
+
+Your company has a massive customer support department.
+
+Over the years, the support agents have resolved millions of tickets.
+
+These tickets contain valuable human knowledge.
+
+You have a large database of past customer support interactions.
+
+You want to fine-tune an open-source model.
+
+You want this model to act as an automated tech support agent.
+
+To do this, you must extract this data from your database.
+
+You must save it into a raw file format on your hard drive.
+
+Often, this data is exported as a CSV file.
+
+Or, very commonly in the AI industry, it is exported as a JSONL file.
+
+We need to understand how to bridge the gap between this raw file and the neural network.
+
+The neural network only understands numbers.
+
+It does not understand SQL databases or CSV headers.
+
+We must convert our human text into the exact mathematical format the training loop expects.
+
+---
+
+## 2. Examining the Raw Data
+
+Suppose you have exported a file named `tickets.jsonl`.
+
+JSONL stands for JSON Lines.
+
+It is a very simple and elegant format.
+
+Every single line in the file is a valid, independent JSON object.
+
+This format is highly efficient for processing large datasets.
+
+You do not need to load the entire gigabyte-sized file into memory at once.
+
+You can stream it, reading it line-by-line, processing it, and saving it.
+
+Here is a conceptual look at one single line of this file:
 
 ```json
 {"ticket_id": 101, "customer_issue": "My router is blinking red.", "agent_reply": "A blinking red light means the router cannot connect to the internet. Please restart it."}
 ```
 
-### The Standard Conversational Format (ShareGPT / OpenAI)
-`SFTTrainer` expects your data to be formatted in a standard conversational array (often referred to as the ShareGPT or OpenAI format).
+Let us break down the components of this raw JSON object in extreme detail.
+
+It contains a key called `"ticket_id"`.
+
+The value associated with this key is the integer `101`.
+
+This is just metadata from the database.
+
+The language model does not need to know the database ID of the ticket.
+
+In fact, feeding it this ID might confuse the model.
+
+It contains a key called `"customer_issue"`.
+
+The value is the string `"My router is blinking red."`.
+
+This is the textual input that the human user actually typed into the support portal.
+
+It is the problem we want our AI model to solve.
+
+It contains a key called `"agent_reply"`.
+
+The value is `"A blinking red light means the router cannot connect to the internet. Please restart it."`.
+
+This is the ground-truth response written by a human expert.
+
+This is exactly what we want our model to learn to generate.
+
+However, a raw language model does not know what a `"customer_issue"` is.
+
+It does not know what an `"agent_reply"` is.
+
+These are arbitrary strings chosen by whoever exported the SQL database.
+
+The language model only knows about a one-dimensional sequence of tokens.
+
+Furthermore, the `SFTTrainer` class in Hugging Face does not know how to parse your specific JSON schema.
+
+It requires the data to be in a strictly standardized, universal format.
+
+We must creatively reshape our data to meet this requirement.
+
+---
+
+## 3. The Target Conversational Format
+
+Almost all modern fine-tuning libraries expect your data in a specific structure.
+
+This structure is often referred to as the "ShareGPT" format.
+
+Sometimes it is called the "OpenAI" conversational format.
+
+It represents a single conversation as a list of sequential messages.
+
+Each message in the list is a dictionary.
+
+Each dictionary has a specific role that dictates who is speaking.
+
+The typical roles are carefully defined by the community.
+
+1. `system`: This provides high-level instructions for the model's overarching behavior.
+2. `user`: This represents the input prompt from the human interacting with the model.
+3. `assistant`: This represents the response generated by the AI model.
+
+The `SFTTrainer` expects your dataset to have a specific column.
+
+This column is usually named `messages`.
+
+This column must contain the list of these message dictionaries.
+
+Here is what our target format must look like:
 
 ```python
 [
@@ -24,14 +168,114 @@ Suppose you have a custom dataset of customer support tickets in a raw `tickets.
 ]
 ```
 
-### Mapping the Data
-We use the Hugging Face `datasets` library to load and map our raw data into this standard structure.
+Let us visualize the structural transformation we need to perform on every single row of our dataset.
+
+```text
+Raw JSONL Structure:
++-------------------------------------------------------------+
+| "ticket_id": 101                                            |
+| "customer_issue": "My router is blinking red."              |
+| "agent_reply": "A blinking red light means..."              |
++-------------------------------------------------------------+
+                               |
+                               | (Data Transformation Mapping)
+                               v
+Target Dataset Structure:
++-------------------------------------------------------------+
+| "messages": [                                               |
+|   {"role": "system", "content": "You are a tech support..."},
+|   {"role": "user", "content": "My router is blinking red."},|
+|   {"role": "assistant", "content": "A blinking red lig..."} |
+| ]                                                           |
++-------------------------------------------------------------+
+```
+
+This structural change is the critical bridge.
+
+It connects your messy real-world data to the pristine mathematical training loop.
+
+Without this step, training is impossible.
+
+---
+
+## 4. Loading the Dataset
+
+To manipulate our data, we will use the Hugging Face `datasets` library.
+
+This library is the industry standard for handling NLP datasets.
+
+It is incredibly fast and highly optimized.
+
+It is highly memory-efficient, even for terabytes of data.
+
+It achieves this by using Apache Arrow under the hood.
+
+Apache Arrow stores data on disk and maps it directly into memory.
+
+This allows the library to handle datasets that are much larger than your computer's available RAM.
+
+First, we must import the necessary loading function from the library.
 
 ```python
 from datasets import load_dataset
+```
 
+Then, we load our raw JSONL file into a Dataset object.
+
+```python
 raw_dataset = load_dataset("json", data_files="tickets.jsonl", split="train")
+```
 
+Let us break down this function call, argument by argument.
+
+The first argument is the string `"json"`.
+
+This tells the `load_dataset` factory function which underlying data loader script to execute.
+
+It knows how to parse JSON and JSONL files efficiently.
+
+The second argument is `data_files="tickets.jsonl"`.
+
+This parameter points to the path of our local file.
+
+If you had multiple files, you could pass a list of paths here.
+
+The third argument is `split="train"`.
+
+By default, `load_dataset` returns a `DatasetDict` object, which might contain 'train', 'test', and 'validation' splits.
+
+By specifying the split, we tell the library to immediately return just the `Dataset` object for the training data.
+
+When this line executes, `raw_dataset` becomes a populated `Dataset` object.
+
+It automatically infers the columns based on the keys present in your JSONL file.
+
+```text
+Columns currently in raw_dataset:
+- ticket_id
+- customer_issue
+- agent_reply
+```
+
+But remember our ultimate goal.
+
+We need a column specifically named `messages`.
+
+We must transform these existing columns into the new structure.
+
+---
+
+## 5. The Mapping Function
+
+We need to write a custom Python function.
+
+This function will dictate how a single row of our raw dataset is transformed.
+
+It must take a row, read its contents, and return a dictionary containing our new `messages` structure.
+
+Here is the complete mapping function:
+
+```python
 def format_conversation(example):
     return {
         "messages": [
@@ -40,37 +284,281 @@ def format_conversation(example):
             {"role": "assistant", "content": example["agent_reply"]}
         ]
     }
-
-formatted_dataset = raw_dataset.map(format_conversation, remove_columns=raw_dataset.column_names)
 ```
+
+Let us analyze this function with extreme precision, line by line.
+
+```python
+def format_conversation(example):
+```
+
+We define a function named `format_conversation`.
+
+The parameter `example` represents one single row from our loaded dataset.
+
+You can think of `example` as behaving exactly like a standard Python dictionary.
+
+It will have keys like `"customer_issue"` and `"agent_reply"`.
+
+```python
+    return {
+```
+
+We begin returning a brand new Python dictionary.
+
+The keys in this returned dictionary will become the new columns for this specific row in the dataset.
+
+```python
+        "messages": [
+```
+
+We define a new key named `"messages"`.
+
+This will become our new column name.
+
+The value associated with this key is a Python list.
+
+```python
+            {"role": "system", "content": "You are a tech support agent."},
+```
+
+This is the first item in our message list.
+
+It is a dictionary defining the system prompt.
+
+Notice that we hardcode the `content` string.
+
+We do this because we want every single example in our dataset to train the model to adopt the persona of a tech support agent.
+
+```python
+            {"role": "user", "content": example["customer_issue"]},
+```
+
+This is the second item in our message list.
+
+It defines the user's input.
+
+We do not hardcode this.
+
+Instead, we dynamically pull the text from `example["customer_issue"]`.
+
+This extracts the exact complaint the user had in this specific ticket.
+
+```python
+            {"role": "assistant", "content": example["agent_reply"]}
+```
+
+This is the third and final item in our message list.
+
+It defines the target response from the assistant.
+
+Again, we dynamically pull the ground-truth text from `example["agent_reply"]`.
+
+This single, simple function defines exactly how our raw data maps to the required conversational structure.
 
 ---
 
-## 2. The Complete End-to-End Pipeline
+## 6. Applying the Mapping Function
 
-Now we combine everything we've learned: **LoRA**, **Chat Templates**, **Loss Masking**, and **SFTTrainer**.
+We have successfully defined the transformation logic for one single row.
+
+Now we must apply this logic to every single row in the massive dataset.
+
+We achieve this using the powerful `.map()` method provided by the `Dataset` object.
+
+```python
+formatted_dataset = raw_dataset.map(format_conversation, remove_columns=raw_dataset.column_names)
+```
+
+Let us deeply understand the mechanics of what this line of code does.
+
+The `.map()` method iterates sequentially over every row in `raw_dataset`.
+
+For each row, it executes our `format_conversation` function.
+
+It passes the row data into the `example` parameter.
+
+It takes the returned dictionary and uses it to update the dataset.
+
+Notice the second argument we passed: `remove_columns=raw_dataset.column_names`.
+
+Why is this argument absolutely critical?
+
+Because the `SFTTrainer` will meticulously inspect the columns of our dataset.
+
+If it sees columns it does not recognize, like `"customer_issue"`, it may throw an error.
+
+Or worse, it may try to tokenize them and include them in the training loss incorrectly.
+
+The trainer only wants columns that it knows how to process, primarily the `"messages"` column.
+
+Therefore, we must actively delete the old, raw columns.
+
+By passing `remove_columns=raw_dataset.column_names`, we delete the original columns at the exact same time we create the new `"messages"` column.
+
+Our dataset is now perfectly formatted.
+
+It is completely sanitized and ready for the training loop.
+
+```text
+Before .map():
+Columns: [ticket_id, customer_issue, agent_reply]
+
+After .map():
+Columns: [messages]
+```
+
+This dataset is now ready to be fed into the tokenizer.
+
+---
+
+## 7. The Complete Pipeline Overview
+
+With our data perfectly prepared, we are now ready to build the actual training script.
+
+This script will combine several advanced concepts we have learned previously.
+
+We will integrate everything into one cohesive pipeline.
+
+We will use:
+
+1. **LoRA**: Parameter-Efficient Fine-Tuning to drastically reduce memory usage.
+2. **Chat Templates**: To properly format our dictionaries into the model's expected token sequence.
+3. **Loss Masking**: To ensure the model only calculates loss on the assistant's replies, not the user's prompt.
+4. **SFTTrainer**: To seamlessly orchestrate the entire complex training loop.
+
+First, we must write our necessary import statements.
 
 ```python
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, TrainingArguments
 from peft import LoraConfig, get_peft_model
 from trl import SFTTrainer, DataCollatorForCompletionOnlyLM
+```
 
+We will define the model we intend to fine-tune.
+
+We will use the Meta Llama 3 8B Instruct model as our foundation.
+
+```python
 model_id = "meta-llama/Llama-3-8B-Instruct"
+```
 
-# 1. Load Tokenizer & Apply Chat Template setup
+This specific base model has already undergone instruction tuning by Meta.
+
+It already knows how to follow general instructions.
+
+We are fine-tuning it further, steering its behavior entirely toward our specific domain of technical support.
+
+---
+
+## 8. Loading the Tokenizer
+
+The first major component we must initialize is the tokenizer.
+
+```python
 tokenizer = AutoTokenizer.from_pretrained(model_id)
+```
+
+The tokenizer is responsible for mapping human-readable text into integers.
+
+It also contains the model's specific chat template hidden within its configuration.
+
+We must carefully handle the concept of the padding token.
+
+```python
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
+```
 
-# 2. Load Model in bf16
+Why is this check necessary?
+
+During the training process, we feed the model batches of sequences.
+
+A batch is a multi-dimensional tensor.
+
+Tensors must be perfectly rectangular structures in memory.
+
+However, our conversational sequences will all have different varying lengths.
+
+Some tickets are short, some are very long.
+
+We must pad the shorter sequences with a dummy token so they match the length of the longest sequence in the batch.
+
+If the tokenizer does not have a dedicated padding token assigned, we simply borrow the End-Of-Sequence (EOS) token.
+
+```text
+Visualizing Padding in a Batch:
+
+Sequence 1 (Length 4): [Token_A, Token_B, Token_C, Token_D]
+Sequence 2 (Length 2): [Token_E, Token_F, PAD_TOK, PAD_TOK]
+
+The tensor is now a perfect 2x4 matrix.
+```
+
+The attention mask will later tell the model to completely ignore these `PAD_TOK` locations during self-attention.
+
+---
+
+## 9. Loading the Model in bfloat16
+
+Next, we must load the massive base model into our GPU memory.
+
+```python
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
     torch_dtype=torch.bfloat16,
     device_map="auto"
 )
+```
 
-# 3. Setup LoRA
+Pay very close attention to the `torch_dtype=torch.bfloat16` argument.
+
+Modern language models possess billions of parameters.
+
+Loading an 8 billion parameter model in full 32-bit floating point precision (FP32) requires roughly 32 gigabytes of VRAM.
+
+This is often far too much memory for standard consumer GPUs.
+
+We solve this by loading the model in 16-bit brain floating point format, known as `bfloat16`.
+
+This cuts the memory requirement exactly in half, down to about 16 gigabytes.
+
+Let us visualize the exact difference between FP32 and bfloat16 bit allocation.
+
+```text
+Standard FP32 (32 bits total):
+[Sign: 1 bit] [Exponent: 8 bits] [Fraction/Mantissa: 23 bits]
+
+Bfloat16 (16 bits total):
+[Sign: 1 bit] [Exponent: 8 bits] [Fraction/Mantissa: 7 bits]
+```
+
+Notice that `bfloat16` retains the exact same 8-bit exponent size as standard FP32.
+
+This means it has the exact same dynamic range, which aggressively prevents overflow and underflow errors during training.
+
+It sacrifices precision in the fraction, which neural networks are highly robust against.
+
+The `device_map="auto"` argument is a Hugging Face Accelerate feature.
+
+It automatically analyzes your available hardware and optimally distributes the model weights across any available GPUs.
+
+---
+
+## 10. Setting Up LoRA
+
+We absolutely do not want to perform full fine-tuning on all 8 billion parameters of Llama 3.
+
+Doing so would require massive computing clusters and hundreds of gigabytes of VRAM just to store the optimizer states.
+
+Instead, we utilize LoRA, which stands for Low-Rank Adaptation.
+
+LoRA entirely freezes the original pretrained weights of the model.
+
+It then injects small, trainable matrices alongside specific layers in the network.
+
+```python
 peft_config = LoraConfig(
     r=16,
     lora_alpha=32,
@@ -79,16 +567,138 @@ peft_config = LoraConfig(
     bias="none",
     task_type="CAUSAL_LM"
 )
+```
 
-# 4. Setup Loss Masking (Data Collator)
+Let us explore every single one of these configuration parameters deeply.
+
+The parameter `r=16` represents the rank of the injected matrices.
+
+This directly determines the bottleneck size of our trainable adapter.
+
+A rank of 16 is a highly common and effective balance between extreme parameter efficiency and the necessary expressive learning power.
+
+Let us clearly define the mathematical weight update operation for LoRA.
+
+$$
+W_{new} = W_{frozen} + \Delta W
+$$
+
+Where the weight update $\Delta W$ is decomposed into two lower-rank matrices:
+
+$$
+\Delta W = B \times A
+$$
+
+And the dimensionalities of these matrices are strictly defined as:
+
+$$
+W_{frozen} \in \mathbb{R}^{d \times k} \\\\
+B \in \mathbb{R}^{d \times r} \\\\
+A \in \mathbb{R}^{r \times k}
+$$
+
+Because $r \ll d$ and $r \ll k$, the number of parameters in $A$ and $B$ is a tiny fraction of the parameters in $W_{frozen}$.
+
+The parameter `lora_alpha=32` is a mathematical scaling factor.
+
+It strictly controls how strongly the newly learned LoRA weights influence the outputs of the frozen base model.
+
+A common rule of thumb is to set `lora_alpha` to exactly twice the value of `r`.
+
+The `target_modules` list tells the LoRA algorithm which specific neural network layers to inject the matrices into.
+
+Here, we specifically target the Query (`q_proj`), Key (`k_proj`), Value (`v_proj`), and Output (`o_proj`) projection matrices inside every attention mechanism.
+
+The parameter `lora_dropout=0.05` randomly zeroes out 5% of the LoRA activations during training to aggressively prevent overfitting.
+
+The `bias="none"` parameter indicates we will not train the bias vectors, saving even more memory.
+
+The `task_type="CAUSAL_LM"` parameter simply informs the PEFT library that our ultimate goal is standard causal language modeling.
+
+---
+
+## 11. Setting Up Loss Masking
+
+This section covers one of the most conceptually crucial mechanics of modern Supervised Fine-Tuning.
+
+Consider how our input sequence looks once it is fully assembled and tokenized:
+
+```text
+[System] You are a tech support agent.
+[User] My router is blinking red.
+[Assistant] A blinking red light means you should restart it.
+```
+
+If we calculate the cross-entropy loss over this entire sequence, the model learns to predict everything.
+
+It will spend its learning capacity trying to memorize how to generate the system prompt.
+
+It will try to learn how to predict what questions the user will ask.
+
+We absolutely do not want this behavior.
+
+We only want the model to learn how to generate the assistant's reply, conditioned on the preceding context.
+
+We must carefully mask out the loss calculation for everything except the assistant's actual tokens.
+
+We accomplish this using a specialized Data Collator.
+
+A Data Collator is a function that takes a list of dataset examples and batches them together into tensors just before they enter the model.
+
+The `DataCollatorForCompletionOnlyLM` class from the `trl` library is explicitly designed for this exact masking task.
+
+```python
 # Find the exact string the tokenizer uses for the assistant's turn
 response_template = "<|start_header_id|>assistant<|end_header_id|>\n\n"
+
 collator = DataCollatorForCompletionOnlyLM(
     response_template=response_template, 
     tokenizer=tokenizer
 )
+```
 
-# 5. Define Training Arguments
+We are required to provide the `response_template` string.
+
+This must be the exact sequence of characters that the tokenizer's chat template outputs right before the assistant's response begins.
+
+For the Llama 3 architecture, the chat template emits `<|start_header_id|>assistant<|end_header_id|>\n\n`.
+
+The data collator will scan through every single tokenized sequence in our batch.
+
+It looks for the token IDs corresponding to this exact template string.
+
+Once it finds that sequence of tokens, it takes all the labels for every token preceding it, and sets them to `-100`.
+
+In the PyTorch backend, a label value of `-100` is explicitly hardcoded to be completely ignored by the cross-entropy loss function calculation.
+
+```text
+Visualizing Loss Masking:
+
+Tokens generated by Chat Template:       Label assigned by Collator:
+<|start_header_id|>system...             -100 (Ignored)
+You are a tech support agent.            -100 (Ignored)
+<|start_header_id|>user...               -100 (Ignored)
+My router is blinking red.               -100 (Ignored)
+<|start_header_id|>assistant...          -100 (Ignored)
+A                                        'A' (Loss calculated)
+blinking                                 'blinking' (Loss calculated)
+red                                      'red' (Loss calculated)
+light...                                 'light...' (Loss calculated)
+```
+
+This masking forces the model to focus 100% of its gradient updates on generating the correct and helpful answers.
+
+It guarantees that the model acts as an assistant, rather than a mimic of the entire conversation.
+
+---
+
+## 12. Defining Training Arguments
+
+Next, we must define the hyperparameters that govern the actual training loop mechanics.
+
+We encapsulate these within a `TrainingArguments` object.
+
+```python
 training_args = TrainingArguments(
     output_dir="./support_model",
     per_device_train_batch_size=4,
@@ -99,57 +709,264 @@ training_args = TrainingArguments(
     optim="adamw_torch",
     save_strategy="epoch"
 )
+```
 
-# 6. Initialize SFTTrainer
+Let us meticulously break down each of these arguments in exhaustive detail.
+
+The `output_dir` defines the folder path where the model checkpoints will be periodically saved during training.
+
+The `per_device_train_batch_size=4` means we process exactly 4 conversational sequences at a time on each available GPU.
+
+The `gradient_accumulation_steps=4` is a highly effective memory-saving trick.
+
+Instead of updating the model weights after every single batch of 4, we accumulate the mathematical gradients over 4 sequential batches.
+
+This mathematically simulates an effective batch size of 16 ($4 \times 4$).
+
+This stabilizes the gradient descent trajectory without requiring the massive VRAM needed to actually hold 16 sequences in memory at once.
+
+The `learning_rate=2e-4` (which is equal to $0.0002$) is a widely accepted standard learning rate for LoRA fine-tuning on causal language models.
+
+The `num_train_epochs=3` dictates that the training loop will iterate over our entire customer support dataset exactly 3 complete times.
+
+The `logging_steps=10` ensures that the trainer will print the current loss value to the console every 10 training steps, allowing us to closely monitor progress.
+
+The `optim="adamw_torch"` specifies the use of the AdamW optimizer, implemented natively in PyTorch for maximum efficiency.
+
+The `save_strategy="epoch"` tells the trainer to save a complete checkpoint of the model at the very end of each epoch, rather than at specific step intervals.
+
+---
+
+## 13. Initializing the SFTTrainer
+
+We have painstakingly assembled all the individual components of our pipeline.
+
+Now we pass all of them into the `SFTTrainer` class instance.
+
+```python
 trainer = SFTTrainer(
     model=model,
     train_dataset=formatted_dataset,
     peft_config=peft_config,
-    dataset_kwargs={"skip_prepare_dataset": True}, # We already formatted it
+    dataset_kwargs={"skip_prepare_dataset": True},
     data_collator=collator,
     max_seq_length=1024,
     tokenizer=tokenizer,
     args=training_args
 )
-
-# 7. Start Training
-trainer.train()
-
-# 8. Save the final LoRA adapter
-trainer.model.save_pretrained("./final_support_lora")
 ```
+
+The `SFTTrainer` acts as the grand orchestrator of the entire fine-tuning process.
+
+It abstracts away the manual `for` loops and the `loss.backward()` calls.
+
+It seamlessly handles the complex interplay between the model, the formatted dataset, the LoRA configuration, and the optimizer.
+
+Pay special attention to the `dataset_kwargs={"skip_prepare_dataset": True}` argument.
+
+By default, the `SFTTrainer` attempts to apply its own internal conversational formatting logic.
+
+However, because we already perfectly mapped our dataset into the standard `"messages"` column in Step 6, we must tell the trainer to skip its internal preparation to avoid corrupting our pristine data.
+
+The `max_seq_length=1024` argument acts as a hard limit on sequence length.
+
+It ensures that we brutally truncate any extremely long conversations that might otherwise cause Out-Of-Memory (OOM) errors on the GPU.
+
+We pass our `collator` to ensure the crucial loss masking is applied correctly during the dynamic batching process.
+
+We pass the `tokenizer` so the trainer knows how to decode sequences for logging purposes.
+
+And finally, we pass our `training_args` to strictly control the flow of the loop.
 
 ---
 
-## 3. Inference: Running the Fine-Tuned Model
+## 14. Starting Training and Saving
 
-After training, you have two folders:
-1. The original base model (`Llama-3-8B-Instruct`)
-2. Your LoRA adapter weights (`./final_support_lora`)
+With everything properly initialized, we can finally execute the training loop.
 
-To run inference, you load the base model and dynamically merge the adapter.
+```python
+trainer.train()
+```
+
+This single method call triggers an immense amount of background computation.
+
+It starts the forward passes through the massive neural network.
+
+It triggers the cross-entropy loss calculations exclusively on the unmasked assistant tokens.
+
+It initiates the backpropagation of errors backwards through the network layers.
+
+And it executes the delicate weight updates in our low-rank LoRA matrices.
+
+As it runs, you will see a progress bar in your terminal, indicating the loss steadily decreasing over time.
+
+Once the 3 epochs are fully complete, the training phase finishes.
+
+We must immediately save our finalized work to disk.
+
+```python
+trainer.model.save_pretrained("./final_support_lora")
+```
+
+Because we utilized the LoRA methodology, it is vital to understand what this command actually saves.
+
+It does **not** save an entire 8 billion parameter language model.
+
+It only saves the tiny, newly learned LoRA adapter weights.
+
+This output directory will be extremely small, often taking up only tens of megabytes of disk space.
+
+It contains exactly, and only, what the model learned about behaving as a specialized tech support agent.
+
+---
+
+## 15. Inference: Running the Fine-Tuned Model
+
+The rigorous training phase is finally complete.
+
+Now we want to actually load our fine-tuned model into memory and use it to generate responses.
+
+Consider the current state of your computer's hard drive.
+
+You now possess two entirely distinct entities.
+
+1. The massive, original, frozen base model (`meta-llama/Llama-3-8B-Instruct`).
+2. Your tiny, custom LoRA adapter weights located in `./final_support_lora`.
+
+To run inference, you cannot simply load the LoRA weights by themselves.
+
+They are mathematically meaningless without the base model's original projection matrices.
+
+We must first load the base model, and then actively attach the LoRA weights to it.
 
 ```python
 from peft import PeftModel
 
-# Load Base
-base_model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.bfloat16)
+# Step 1: Load the Base Model
+base_model = AutoModelForCausalLM.from_pretrained(
+    model_id, 
+    torch_dtype=torch.bfloat16,
+    device_map="auto"
+)
+```
 
-# Load and Merge Adapter
+We load the base model exactly as we did prior to training, ensuring we use `bfloat16` to save VRAM.
+
+Next, we load the adapter and merge it with the base weights.
+
+```python
+# Step 2: Load the Adapter and Merge
 model = PeftModel.from_pretrained(base_model, "./final_support_lora")
-model = model.merge_and_unload() # Fuses LoRA weights into the base model permanently
+model = model.merge_and_unload()
+```
 
-# Prepare Input
+Let us thoroughly explain what the `merge_and_unload()` function accomplishes computationally.
+
+When we simply load the `PeftModel`, the LoRA weights sit alongside the base weights in GPU memory.
+
+During a forward pass, the input tensor flows through the base weights, and simultaneously flows through the LoRA weights.
+
+The two resulting tensors are then mathematically added together at the very end of the layer.
+
+While this works, it requires two separate matrix multiplications, which is computationally slower during inference.
+
+The `merge_and_unload()` function permanently and physically adds the LoRA matrix values directly into the base model's original matrix values.
+
+$$
+W_{merged} = W_{base} + (B \times A)
+$$
+
+This operation fuses the custom knowledge completely into a single, unified set of weights.
+
+The resulting merged model operates exactly as fast as the original base model, but now permanently contains your fine-tuned knowledge.
+
+```text
+Visualizing the Merge Process:
+
+[Base Model Weights Matrix]
+             +
+[LoRA A * LoRA B Matrix Result]
+             |
+        (merge_and_unload)
+             v
+[New Unified Weights Matrix]
+```
+
+This single model is what you would ultimately deploy to a production server.
+
+---
+
+## 16. Generating Text
+
+Now we prepare a test input to see our merged model in action.
+
+We must use the exact same conversational list format we used during the training phase.
+
+```python
 test_messages = [
     {"role": "system", "content": "You are a tech support agent."},
     {"role": "user", "content": "My screen is totally black."}
 ]
+```
 
-inputs = tokenizer.apply_chat_template(test_messages, return_tensors="pt", add_generation_prompt=True).to("cuda")
+We cannot feed these Python dictionaries directly into the neural network model.
 
-# Generate
+We must pass them through the tokenizer's chat template to generate the correct sequence of raw integer tokens.
+
+```python
+inputs = tokenizer.apply_chat_template(
+    test_messages, 
+    return_tensors="pt", 
+    add_generation_prompt=True
+).to("cuda")
+```
+
+The `add_generation_prompt=True` argument is of paramount importance here.
+
+It explicitly appends the sequence `<|start_header_id|>assistant<|end_header_id|>\n\n` to the very end of our input tokens.
+
+This primes the model's generation process.
+
+It acts as a strong signal, telling the model, "The user has finished speaking, and it is now the assistant's turn to begin."
+
+Without this, the model might try to continue generating user text instead of replying.
+
+Finally, we instruct the model to generate the response.
+
+```python
 outputs = model.generate(inputs, max_new_tokens=50)
+```
+
+The model autoregressively predicts the response, outputting one token after another.
+
+It leverages the newly injected knowledge embedded deeply within the merged LoRA weights.
+
+The output from this function is a tensor of raw integer token IDs.
+
+We must decode this tensor back into human-readable text.
+
+```python
 print(tokenizer.decode(outputs[0], skip_special_tokens=True))
 ```
 
-By completing this lesson, you have officially mastered the standard Supervised Fine-Tuning pipeline. In the next lessons, we will explore how to do this on hardware that is far too small to hold the base model (Quantization).
+And upon execution, you will see the model reply flawlessly in the helpful, professional style of your custom tech support dataset!
+
+---
+
+## 17. Conclusion
+
+By completing this rigorous and detailed lesson, you have officially mastered the standard Supervised Fine-Tuning pipeline.
+
+You now possess the knowledge to manipulate raw, messy data into the strict conversational format required by modern trainers.
+
+You deeply understand how to configure LoRA to drastically save memory without sacrificing performance.
+
+You understand the mathematical necessity of applying loss masking, ensuring the model only learns from the assistant's specific replies.
+
+You know how to expertly orchestrate the complex training run using the `SFTTrainer` class.
+
+And you know how to properly merge the final weights for highly efficient inference generation.
+
+In the upcoming lessons, we will explore how to perform this exact same comprehensive process on hardware that is far too small to even hold the base model in memory.
+
+We will dive deep into the fascinating and highly complex world of Quantization and QLoRA.
