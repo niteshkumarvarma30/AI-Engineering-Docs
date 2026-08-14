@@ -1,279 +1,1703 @@
-# Lesson 12: Multi-turn Conversations & Memory
+# Lesson 12 — Multi-turn Conversations & Memory
 
-Welcome to Lesson 12 of the AI Engineering curriculum. In this lesson, we will explore one of the most critical aspects of building interactive AI applications: **Multi-turn Conversations and Memory Management**. 
+## Complete LLM Application Note
 
-While humans naturally remember the context of an ongoing conversation, Large Language Models (LLMs) do not. Understanding how to bridge this gap between a stateless model and a stateful user experience is fundamental to AI engineering.
+This lesson explains how an LLM application maintains context across multiple turns and how conversation memory works.
 
----
+The key idea is:
 
-## 1. The Fundamental Truth: LLMs are Stateless Functions
-
-At their core, Large Language Models are purely mathematical functions. They map an input sequence of tokens to a probability distribution over the next possible tokens. 
-
-If we define the model as a function $f$, the generation of a response is simply:
-
-$$
-\text{Response} = f(\text{Prompt})
-$$
-
-When a user interacts with a chatbot (like ChatGPT, Claude, or Gemini), it feels as though the model "remembers" what was said three messages ago. In reality, the model itself has no internal persistent memory of the conversation between API calls. Once the model finishes generating a response and the API connection closes, all activations and context are discarded. The model resets to its base state.
-
-So, how do we create the illusion of memory? 
+> An LLM does not automatically remember every previous conversation. The application provides relevant previous information as context.
 
 ---
 
-## 2. The Illusion of Memory: Simulating State via Prompting
+# 1. The Basic Problem
 
-Since the model cannot remember past turns, **we must remind it of everything that has happened every single time we ask it a new question.**
+Suppose you tell an LLM:
 
-We achieve this by appending the entire conversation history to the prompt context. Each time the user sends a new message, the application developer (you) must package the previous messages, the new message, and any system instructions, and send the entire payload back to the stateless API.
+```text
+User:
+My name is Alex.
+```
 
-### The Expanding Context
+The assistant responds:
 
-Let $U_i$ be the $i$-th user message and $A_i$ be the $i$-th assistant message. The context sent to the model at turn $t$ is:
+```text
+Assistant:
+Nice to meet you, Alex!
+```
 
-$$
-C_t = \text{System Prompt} + \sum_{i=1}^{t-1} (U_i + A_i) + U_t
-$$
+Later you ask:
 
-This means that with every turn of the conversation, the payload sent to the API grows larger. 
+```text
+User:
+What is my name?
+```
 
-#### ASCII Diagram: The Expanding Context Payload
+If the second request contains only:
+
+```text
+What is my name?
+```
+
+the model may not know that you previously said:
+
+```text
+My name is Alex.
+```
+
+The application therefore needs to preserve and provide relevant context.
+
+```text
+Previous conversation
+        ↓
+Application stores it
+        ↓
+Relevant history is added to new request
+        ↓
+LLM receives context
+        ↓
+LLM generates response
+```
+
+---
+
+# 2. LLM Memory vs Application Memory
+
+This distinction is extremely important.
+
+## Model Parameters
+
+During training, the model learns patterns in its parameters:
+
+```text
+Training
+   ↓
+Weights
+   ↓
+Learned knowledge / patterns
+```
+
+These weights normally do not change just because you have a conversation.
+
+## Conversation Memory
+
+The application can store information externally:
+
+```text
+SQL database
+Vector database
+Redis
+Files
+Application state
+```
+
+Then it can retrieve relevant information and put it back into the model's context.
+
+Therefore:
+
+\[
+\boxed{
+\text{Conversation memory} \neq \text{model weights}
+}
+\]
+
+---
+
+# 3. Simplest Chatbot Without Memory
+
+Suppose the user sends:
+
+```text
+Message 1:
+My name is Alex.
+```
+
+Application sends:
+
+```text
+My name is Alex.
+```
+
+LLM responds:
+
+```text
+Nice to meet you, Alex.
+```
+
+Then user sends:
+
+```text
+Message 2:
+What is my name?
+```
+
+Application sends only:
+
+```text
+What is my name?
+```
+
+The previous message is not necessarily available to the model.
+
+---
+
+# 4. Chatbot With Conversation History
+
+Instead, the application stores:
+
+```text
+User:
+My name is Alex.
+
+Assistant:
+Nice to meet you, Alex.
+```
+
+When the user asks:
+
+```text
+What is my name?
+```
+
+the application constructs:
+
+```text
+User:
+My name is Alex.
+
+Assistant:
+Nice to meet you, Alex.
+
+User:
+What is my name?
+```
+
+Then sends the relevant context to the model.
+
+The model can answer:
+
+```text
+Your name is Alex.
+```
+
+---
+
+# 5. Important Mental Model
+
+Think of the LLM as:
+
+```text
+                    LLM
+                     │
+              ┌──────┴──────┐
+              │             │
+         Input Context   Parameters
+              │             │
+              └──────┬──────┘
+                     ↓
+                 Response
+```
+
+The application decides what previous information becomes part of the input context.
+
+---
+
+# 6. Multi-turn Conversation
+
+Example:
+
+```text
+Turn 1
+
+User:
+I am learning Python.
+
+Assistant:
+Great! Python is useful for AI development.
+```
+
+Then:
+
+```text
+Turn 2
+
+User:
+What should I learn next?
+```
+
+The second question depends on Turn 1.
+
+So the application can provide:
+
+```text
+User:
+I am learning Python.
+
+Assistant:
+Great! Python is useful for AI development.
+
+User:
+What should I learn next?
+```
+
+Now the LLM can understand the question in the context of Python learning.
+
+---
+
+# 7. What Is a Turn?
+
+A turn is generally one interaction between the user and assistant.
+
+Example:
 
 ```text
 Turn 1:
-[ User Msg 1 ] -> API -> [ Assistant Msg 1 ]
+User → Assistant
 
 Turn 2:
-[ User Msg 1       ]
-[ Assistant Msg 1  ] -> API -> [ Assistant Msg 2 ]
-[ User Msg 2       ]
+User → Assistant
 
 Turn 3:
-[ User Msg 1       ]
-[ Assistant Msg 1  ]
-[ User Msg 2       ]
-[ Assistant Msg 2  ] -> API -> [ Assistant Msg 3 ]
-[ User Msg 3       ]
+User → Assistant
 ```
 
-This approach works flawlessly for short conversations, but it introduces significant architectural and cost challenges as the conversation scales, which we will address in the memory management section.
+A conversation might look like:
+
+```text
+Turn 1:
+User: Hello
+Assistant: Hi!
+
+Turn 2:
+User: Explain Transformers.
+Assistant: ...
+
+Turn 3:
+User: Explain attention.
+Assistant: ...
+
+Turn 4:
+User: Give me a numerical example.
+Assistant: ...
+```
+
+Later messages may depend on previous turns.
 
 ---
 
-## 3. Chat Formats, Roles, and Special Tokens
+# 8. Chat History
 
-When we send this expanding history to the LLM, we cannot simply concatenate the text. If we did, the model wouldn't know which text was written by the user, which was written by itself, and which are instructions from the developer.
+The application can store messages as structured records.
 
-To solve this, models are fine-tuned using specific **Chat Formats** that utilize **Special Tokens**.
+Example:
 
-### The Three Standard Roles
-
-Most modern LLM APIs (like OpenAI's Chat Completions API) enforce a structured JSON format containing distinct roles:
-
-1. **System**: The meta-instructions or "persona" given to the model. This dictates behavior, rules, and boundaries. It is usually placed at the very beginning of the context.
-2. **User**: The inputs provided by the human end-user.
-3. **Assistant**: The previous responses generated by the LLM.
-
-### Special Tokens (e.g., ChatML)
-
-Under the hood, the API provider translates your structured JSON array into a single contiguous raw string that the model can process. To demarcate the boundaries between different roles, the string is injected with special, non-printable tokens that the model was trained to recognize as delimiters.
-
-A popular format is **ChatML** (Chat Markup Language), which uses tokens like `<|im_start|>` and `<|im_end|>`.
-
-#### ASCII Diagram: JSON to Raw String Translation
-
-**Developer sends JSON:**
-```json
-[
-  {"role": "system", "content": "You are a helpful math tutor."},
-  {"role": "user", "content": "What is 2+2?"},
-  {"role": "assistant", "content": "It is 4."},
-  {"role": "user", "content": "And 3+3?"}
-]
-```
-
-**API translates to Raw String (Input to the Neural Network):**
 ```text
-<|im_start|>system
-You are a helpful math tutor.<|im_end|>
-<|im_start|>user
-What is 2+2?<|im_end|>
-<|im_start|>assistant
-It is 4.<|im_end|>
-<|im_start|>user
-And 3+3?<|im_end|>
-<|im_start|>assistant
+id | role      | content
+---|-----------|------------------------
+1  | user      | My name is Alex.
+2  | assistant | Nice to meet you, Alex.
+3  | user      | What is my name?
 ```
 
-Notice the trailing `<|im_start|>assistant` at the end? This technique is called **priming**. By leaving the assistant block open, the model is forced to begin generating the assistant's response as the next tokens.
+Conceptually:
+
+```text
+Conversation
+     │
+     ├── User message
+     ├── Assistant message
+     ├── User message
+     └── Assistant message
+```
 
 ---
 
-## 4. The Context Window Limits and Computational Costs
+# 9. Chat History Becomes Context
 
-The strategy of appending the entire history has a hard physical limit: the **Context Window**.
+When a new message arrives:
 
-Every LLM has a maximum number of tokens it can process in a single request, denoted as $N_{max}$. For early models (like GPT-3), $N_{max}$ was 2,048 tokens. Today, models like Gemini 1.5 Pro support up to 2,000,000 tokens.
+```text
+User:
+What is my name?
+```
 
-If the expanding context $C_t$ exceeds $N_{max}$, the API will throw an error, or the model will simply fail to process the input.
+the application retrieves previous messages:
 
-$$
-\text{Condition for failure: } |C_t| > N_{max}
-$$
+```text
+My name is Alex.
+Nice to meet you, Alex.
+```
 
-### The Cost of Expanding Context
+and constructs:
 
-Even if the context window is virtually infinite (e.g., 2 million tokens), sending the entire history every time is highly inefficient. 
+```text
+System instructions
 
-1. **Financial Cost**: API providers charge per input token. If your conversation history is 100,000 tokens long, every single new message from the user will cost you the price of 100,000 input tokens.
-2. **Computational Complexity (Attention)**: The standard Transformer self-attention mechanism has quadratic time and space complexity with respect to the sequence length $N$. 
-   $$ \text{Complexity} = O(N^2) $$
-   While modern optimization techniques (like FlashAttention, Ring Attention, and KV-caching) mitigate this, processing massive contexts still introduces latency (Time-to-First-Token).
+Conversation history:
+User: My name is Alex.
+Assistant: Nice to meet you, Alex.
 
-Therefore, AI Engineers must implement **Memory Management Strategies**.
+Current user:
+What is my name?
+```
+
+Then:
+
+```text
+Context
+  ↓
+LLM
+  ↓
+Response
+```
 
 ---
 
-## 5. Memory Management Strategies
+# 10. Context Window
 
-When building production chatbots, you must proactively manage the context window. Here are the four primary strategies used in the industry.
+There is a limit to how much tokenized information a model can process in one context.
 
-### Strategy 1: FIFO Truncation (Sliding Window)
+This is called the:
 
-The simplest approach is **First-In, First-Out (FIFO)**. We maintain a sliding window that only keeps the last $k$ messages (or tokens) of the conversation.
+\[
+\boxed{\text{Context Window}}
+\]
 
-**Algorithm:**
-1. Always keep the System Prompt (pin it to the top).
-2. Count the tokens of the conversation history.
-3. If total tokens > threshold, drop the oldest `[User, Assistant]` turn.
-4. Repeat until total tokens < threshold.
+For example, if a model supports a 128K-token context window, the request must stay within the model's applicable context limits, including the input and output according to the model/API.
 
-**Pros**: Extremely simple to implement. Guarantees you never exceed the context limit. Costs are capped.
-**Cons**: Absolute amnesia. If the user mentioned their name in Turn 1, and the conversation is now at Turn 50, the model will have completely forgotten their name.
+---
 
-#### ASCII Diagram: Sliding Window (k=2 turns)
+# 11. Context Window Is Not Memory
+
+This distinction is critical.
+
+### Context Window
+
+Information currently supplied to the model.
+
+### Memory
+
+Information stored by the application so it can potentially be retrieved later.
+
+Think:
+
 ```text
-[ System Prompt ] (Pinned)
---- dropped --- [ User Msg 1 ]
---- dropped --- [ Assistant Msg 1 ]
-[ User Msg 2 ]
-[ Assistant Msg 2 ]
-[ User Msg 3 ]
-[ Assistant Msg 3 ]
+Memory
+  ↓
+Stored outside the model
+  ↓
+Retrieve relevant information
+  ↓
+Context Window
+  ↓
+LLM
 ```
 
-### Strategy 2: Periodic Summarization
+Therefore:
 
-Instead of dropping old messages entirely, we can compress them using the LLM itself.
-
-**Algorithm:**
-When the history reaches a certain length, we make an asynchronous API call to an LLM, asking it to summarize the oldest messages. We then replace those raw messages with the summary.
-
-$$
-\text{Summary}_{new} = f_{\text{LLM}}(\text{Prompt: "Update this summary with the following conversation: "} + \text{Summary}_{old} + \text{Turns to compress})
-$$
-
-**Context Construction:**
-```text
-[ System Prompt ]
-[ System Note: Summary of earlier conversation: "User is a programmer living in NY learning Python." ]
-[ User Msg 4 ]
-[ Assistant Msg 4 ]
-```
-
-**Pros**: Retains the "gist" and core facts of the distant past. 
-**Cons**: High latency to compute summaries. Loss of granular details (exact phrasing is lost). Hallucinations in summarization can compound over time.
-
-### Strategy 3: Vector Databases and RAG for Episodic Memory
-
-To achieve effectively infinite memory without quadratic cost scaling, we use **Retrieval-Augmented Generation (RAG)** as an episodic memory bank.
-
-**Algorithm:**
-1. As the conversation happens, asynchronously embed each `[User, Assistant]` turn using an Embedding Model.
-2. Store these vector embeddings in a Vector Database (like Pinecone, Milvus, or pgvector).
-3. When the user asks a new question, embed the new question.
-4. Query the vector database for the top-$k$ most semantically similar past turns.
-5. Inject these retrieved turns into the current prompt as context.
-
-**Context Construction:**
-```text
-[ System Prompt ]
-[ Relevant Past Context:
-  - Turn 12: User asked about React hooks.
-  - Turn 24: User mentioned they use Next.js.
-]
-[ Recent History (Sliding Window of last 2 turns) ]
-[ User Msg 50 ]
-```
-
-**Pros**: Highly scalable. Can retrieve extremely specific details from thousands of turns ago if semantically relevant to the current question.
-**Cons**: Complex infrastructure. "Semantic similarity" is not always what you need for memory (e.g., retrieving state changes). 
-
-### Strategy 4: State Tracking / Knowledge Graphs (Entity Memory)
-
-Instead of summarizing the *conversation*, we maintain a structured JSON state of *facts* about the user. 
-
-**Algorithm:**
-Run a background LLM process (or use tool-calling/functions) to extract structured data from the conversation. 
-
-```json
-// User Profile State
-{
-  "name": "Alice",
-  "occupation": "Software Engineer",
-  "preferences": ["Python", "Dark Mode"]
+\[
+\boxed{
+\text{Memory} \rightarrow \text{Context}
 }
+\]
+
+---
+
+# 12. Why Can't We Send the Entire Conversation Forever?
+
+Suppose a conversation grows:
+
+```text
+Turn 1
+Turn 2
+Turn 3
+...
+Turn 1000
 ```
-Inject this JSON string directly into the System prompt.
 
-**Pros**: Highly accurate, structured, and easy to query programmatically.
-**Cons**: Rigid. The LLM must be explicitly programmed/prompted to extract the right schemas.
+Sending everything every time can become:
 
----
+- expensive
+- slower
+- context-heavy
+- eventually impossible because of context limits
 
-## 6. Advanced Concept: KV-Caching
-
-As an AI Engineer, you should understand how API providers optimize multi-turn conversations on their end. 
-
-Because the conversation history $C_{t-1}$ is sent repeatedly, computing the attention matrices for the exact same tokens over and over is wasteful. Modern LLM inference engines (like vLLM or TGI) use **Key-Value (KV) Caching**.
-
-The engine caches the Key and Value matrices of the attention mechanism for the history tokens. When Turn $t$ arrives, the engine only needs to compute the attention for the *new* tokens ($U_t$) and simply retrieves the cached computations for the history.
-
-This is why **Prompt Caching** APIs are becoming popular (e.g., Anthropic's Prompt Caching). If you send the exact same large prefix (System prompt + early history), you get a massive discount in cost and latency because the provider just loads it from the KV cache.
+Therefore applications need context management.
 
 ---
 
-## 7. Typical Interview Questions
+# 13. Simple Context Management
 
-Here are common questions you might face in an AI Engineering interview regarding memory and context, along with how to approach them.
+A basic strategy is:
 
-### Q1: "We are building a customer support chatbot. Users are complaining that the bot forgets their order number halfway through the conversation. How do you fix this?"
+> Keep only the most recent messages.
 
-**Ideal Answer:** 
-This is a context window management issue. Currently, the application is likely using a strict sliding window (FIFO) that drops the order number once the conversation gets too long. I would implement a hybrid memory approach:
-1. **Entity Extraction**: Use function calling on the first few turns to extract the `order_number` and store it in the session state (a database or local cache).
-2. **Dynamic System Prompt**: Inject the extracted `order_number` into the System prompt, which is permanently pinned to the top of the context window. This ensures the bot *always* knows the order number regardless of how long the conversation runs.
+For example:
 
-### Q2: "What is the difference between RAG and Summarization for conversation memory? When would you use which?"
+```text
+Conversation:
 
-**Ideal Answer:**
-- **Summarization** compresses the past sequentially. It is great for maintaining the overarching narrative and high-level state of a conversation, but it loses exact phrasing and granular details.
-- **RAG (Vector Memory)** retrieves exact past snippets based on semantic similarity to the current query. It is great for "episodic memory"—recalling a specific code snippet or quote from 100 turns ago.
-- **When to use**: Use Summarization for casual companion bots or therapy bots where narrative flow matters. Use RAG for coding assistants or enterprise research bots where pulling exact historical data points is critical. For state-of-the-art apps, we combine both: a sliding window for recent context, summaries for overarching state, and RAG for deep historical retrieval.
+Turn 1
+Turn 2
+Turn 3
+Turn 4
+Turn 5
+Turn 6
+Turn 7
+Turn 8
+```
 
-### Q3: "Explain what `<|im_start|>` and `<|im_end|>` are used for in LLMs."
+Keep:
 
-**Ideal Answer:**
-They are special, non-printable tokens used in the ChatML format (and similar chat templates) to structure a raw text string into distinct roles (System, User, Assistant). Because LLMs only process flat text, these boundary tokens allow the model to differentiate between instructions from the developer, inputs from the user, and its own past outputs. Leaving the assistant block "open" at the end of the prompt primes the model to generate the assistant's response.
+```text
+Turn 6
+Turn 7
+Turn 8
+```
 
-### Q4: "If an LLM has a 128k context window, why shouldn't we just append the entire history of a 2-year conversation until we hit the limit?"
+Older turns are removed or handled separately.
 
-**Ideal Answer:**
-Three main reasons:
-1. **Cost**: API pricing is per-token. Sending 100k tokens of history for every single new message (e.g., "Hi") is financially unsustainable.
-2. **Latency**: Despite optimizations like KV-caching, processing massive contexts increases Time-to-First-Token (TTFT).
-3. **Lost in the Middle**: Research shows that LLMs suffer from the "Lost in the Middle" phenomenon, where they struggle to retrieve facts buried in the middle of a massive context window, leading to degraded reasoning quality compared to a concise, relevant prompt.
+This is commonly called a sliding-window approach.
 
 ---
-*End of Lesson 12*
+
+# 14. Sliding Window
+
+Conceptually:
+
+```text
+Conversation:
+
+[1] [2] [3] [4] [5] [6] [7] [8]
+
+Keep last 4:
+
+             [5] [6] [7] [8]
+```
+
+When Turn 9 arrives:
+
+```text
+             [6] [7] [8] [9]
+```
+
+The window moves forward.
+
+---
+
+# 15. Problem With Sliding Window
+
+Suppose the user said:
+
+```text
+Turn 1:
+My project is called CognitRAG.
+```
+
+Then after many turns:
+
+```text
+Turn 101:
+How should I improve my project?
+```
+
+If Turn 1 has been removed from the active context, the model may no longer know the project name.
+
+This motivates long-term memory.
+
+---
+
+# 16. Short-term Memory
+
+Short-term memory usually means information from the recent conversation.
+
+Example:
+
+```text
+User:
+I am building a chatbot.
+
+Assistant:
+Great.
+
+User:
+It uses Gemini.
+
+Assistant:
+That can work well.
+
+User:
+What database should I use?
+```
+
+Recent context provides:
+
+```text
+chatbot
+Gemini
+```
+
+This is short-term conversational context.
+
+---
+
+# 17. Long-term Memory
+
+Long-term memory stores information that may be useful much later.
+
+Example:
+
+```text
+User:
+My project uses Supabase for conversation storage.
+```
+
+The application can store this as a memory.
+
+Much later:
+
+```text
+User:
+How should I design the database?
+```
+
+The system can retrieve:
+
+```text
+User uses Supabase.
+```
+
+and include it in context.
+
+---
+
+# 18. Explicit vs Implicit Memory
+
+## Explicit memory
+
+The user explicitly says:
+
+```text
+Remember that my project uses Supabase.
+```
+
+The application can store it.
+
+## Implicit memory
+
+The system identifies potentially useful information from conversation and stores it according to its memory policy.
+
+Production systems should be careful about what information is retained and why.
+
+---
+
+# 19. Memory Is Not Just a Vector Database
+
+A common misconception is:
+
+> LLM memory = vector database.
+
+Not necessarily.
+
+Memory can use:
+
+```text
+SQL database
+NoSQL database
+Redis
+Vector database
+Graph database
+Files
+Application state
+```
+
+A production system may use several of these together.
+
+---
+
+# 20. Structured Memory
+
+Some information is better stored as structured data.
+
+Example:
+
+```text
+user_id: 123
+project: CognitRAG
+database: Supabase
+framework: FastAPI
+```
+
+Structured data is useful when exact retrieval or filtering is required.
+
+---
+
+# 21. Semantic Memory
+
+Suppose the conversation contains:
+
+```text
+I am building a chatbot that remembers
+previous conversations and retrieves relevant
+past information.
+```
+
+This can be converted into an embedding:
+
+```text
+Text
+ ↓
+Embedding model
+ ↓
+Vector
+ ↓
+Vector database
+```
+
+For example:
+
+```text
+[0.12, -0.42, 0.77, ...]
+```
+
+The vector represents semantic information.
+
+---
+
+# 22. Why Embeddings Help Memory
+
+Suppose the user later asks:
+
+```text
+How can I make my assistant remember previous chats?
+```
+
+The wording differs from:
+
+```text
+I am building a chatbot that remembers previous conversations.
+```
+
+Embedding similarity can identify that they are semantically related.
+
+Conceptually:
+
+```text
+Current query
+     ↓
+Embedding
+     ↓
+Vector similarity search
+     ↓
+Relevant memories
+     ↓
+Context
+     ↓
+LLM
+```
+
+---
+
+# 23. Memory Retrieval
+
+A typical semantic-memory pipeline is:
+
+```text
+User Query
+    ↓
+Embedding Model
+    ↓
+Query Vector
+    ↓
+Vector Search
+    ↓
+Top-k Relevant Memories
+    ↓
+Optional Reranking
+    ↓
+Context Construction
+    ↓
+LLM
+```
+
+This is conceptually similar to RAG.
+
+---
+
+# 24. Memory vs RAG
+
+They use similar mechanisms but solve different problems.
+
+## RAG
+
+Usually retrieves information from an external knowledge source.
+
+```text
+PDF
+ ↓
+Chunks
+ ↓
+Embeddings
+ ↓
+Vector DB
+ ↓
+Retrieve
+ ↓
+LLM
+```
+
+## Memory
+
+Retrieves information about the ongoing user/application interaction.
+
+```text
+Past conversations
+ ↓
+Memory store
+ ↓
+Retrieve relevant memories
+ ↓
+LLM
+```
+
+Both can use embeddings and vector search.
+
+---
+
+# 25. A Memory-Based Chatbot
+
+A more complete architecture:
+
+```text
+                  USER
+                   │
+                   ▼
+              Current Query
+                   │
+          ┌────────┴────────┐
+          │                 │
+          ▼                 ▼
+   Recent History      Memory Retrieval
+          │                 │
+          │            Embedding Search
+          │                 │
+          └────────┬────────┘
+                   ▼
+             Context Builder
+                   │
+                   ▼
+              LLM / Agent
+                   │
+                   ▼
+                Response
+                   │
+          ┌────────┴────────┐
+          ▼                 ▼
+   Store Message       Store Memory
+```
+
+---
+
+# 26. Chat Templates
+
+Modern LLMs often use structured conversation formats.
+
+Instead of simply concatenating:
+
+```text
+Hello
+Hi
+How are you?
+```
+
+the application may represent roles:
+
+```text
+system
+user
+assistant
+user
+assistant
+```
+
+For example:
+
+```text
+<system>
+You are a helpful assistant.
+</system>
+
+<user>
+Explain attention.
+</user>
+
+<assistant>
+Attention allows...
+</assistant>
+```
+
+The exact format depends on the model.
+
+---
+
+# 27. System, User and Assistant Roles
+
+A conversation commonly contains:
+
+```text
+System:
+Instructions for the model.
+
+User:
+The user's message.
+
+Assistant:
+The model's previous response.
+```
+
+Example:
+
+```text
+System:
+You are a helpful AI tutor.
+
+User:
+Explain Transformers.
+
+Assistant:
+A Transformer uses attention...
+
+User:
+Explain attention numerically.
+```
+
+The model uses the supplied context to generate the next assistant response.
+
+---
+
+# 28. Why Chat Templates Matter
+
+Different models may expect different special tokens and role formatting.
+
+Conceptually:
+
+```text
+Conversation
+     ↓
+Chat Template
+     ↓
+Formatted Token Sequence
+     ↓
+Tokenizer
+     ↓
+LLM
+```
+
+The template tells the model:
+
+- who is speaking
+- where the assistant response begins
+- how the conversation is structured
+
+---
+
+# 29. Multi-turn Request Flow
+
+Suppose:
+
+```text
+Turn 1:
+User: Explain Transformers.
+
+Turn 2:
+User: What is attention?
+
+Turn 3:
+User: Give me a numerical example.
+```
+
+The application can construct:
+
+```text
+System:
+You are a helpful AI tutor.
+
+User:
+Explain Transformers.
+
+Assistant:
+...
+
+User:
+What is attention?
+
+Assistant:
+...
+
+User:
+Give me a numerical example.
+```
+
+Then the LLM generates Turn 3's response.
+
+---
+
+# 30. The LLM Doesn't "Replay" Conversation
+
+Technically, the model is not normally reading some hidden conversation database.
+
+Instead, the application provides tokens representing the relevant conversation:
+
+```text
+Conversation history
+       ↓
+Tokenizer
+       ↓
+Token sequence
+       ↓
+Transformer
+```
+
+The Transformer processes the supplied context.
+
+---
+
+# 31. Context Construction
+
+A production application may construct:
+
+```text
+System Instructions
++
+Recent Conversation
++
+Retrieved Memories
++
+Retrieved Documents
++
+Current User Message
+```
+
+Then:
+
+```text
+Everything
+    ↓
+Context Builder
+    ↓
+LLM
+```
+
+This is a major AI-engineering concept.
+
+---
+
+# 32. Example Context Builder
+
+Suppose:
+
+### System
+
+```text
+You are an AI tutor.
+```
+
+### Recent history
+
+```text
+User: I am learning Transformers.
+Assistant: Great.
+```
+
+### Memory
+
+```text
+User is studying LLM architecture.
+```
+
+### Current query
+
+```text
+Explain KV cache.
+```
+
+Final context:
+
+```text
+SYSTEM:
+You are an AI tutor.
+
+MEMORY:
+User is studying LLM architecture.
+
+HISTORY:
+User: I am learning Transformers.
+Assistant: Great.
+
+CURRENT USER:
+Explain KV cache.
+```
+
+Then:
+
+```text
+Context
+ ↓
+LLM
+ ↓
+Response
+```
+
+---
+
+# 33. Context Budget
+
+Suppose a model supports a large context window.
+
+You still need to allocate space for:
+
+```text
+System prompt
++
+Memory
++
+Retrieved documents
++
+Conversation history
++
+Current query
++
+Output
+```
+
+Therefore context management is a budgeting problem.
+
+Conceptually:
+
+\[
+\boxed{
+Context =
+Instructions+
+Memory+
+History+
+Retrieval+
+Query
+}
+\]
+
+while keeping the total within the applicable model context limits.
+
+---
+
+# 34. Summarization Memory
+
+Instead of putting hundreds of old messages into the active context, the application can summarize them.
+
+Original:
+
+```text
+Turn 1
+Turn 2
+Turn 3
+...
+Turn 50
+```
+
+Create:
+
+```text
+Conversation Summary:
+
+The user is building a chatbot using FastAPI,
+Supabase, Redis and Gemini. They want semantic
+memory and contextual responses.
+```
+
+Then:
+
+```text
+Old conversation
+       ↓
+Summarizer
+       ↓
+Compact summary
+       ↓
+Future context
+```
+
+---
+
+# 35. Hierarchical Memory
+
+A sophisticated system may have:
+
+```text
+Recent messages
+       ↓
+Short-term memory
+
+Conversation summaries
+       ↓
+Medium-term memory
+
+Persistent user/project facts
+       ↓
+Long-term memory
+```
+
+Conceptually:
+
+```text
+             Memory System
+                   │
+       ┌───────────┼───────────┐
+       ▼           ▼           ▼
+    Recent      Summary     Persistent
+    History     Memory       Facts
+```
+
+---
+
+# 36. Memory Retrieval Example
+
+Suppose stored memories are:
+
+```text
+M1:
+User is learning Transformers.
+
+M2:
+User is building a chatbot.
+
+M3:
+User likes photography.
+
+M4:
+User uses Supabase for chat history.
+```
+
+Current query:
+
+```text
+How should I store conversation embeddings?
+```
+
+Semantic retrieval may rank:
+
+```text
+M4 → highly relevant
+M2 → relevant
+M1 → somewhat relevant
+M3 → irrelevant
+```
+
+The application might retrieve only the relevant memories.
+
+This prevents irrelevant information from consuming context.
+
+---
+
+# 37. Memory Retrieval Is a Ranking Problem
+
+The system usually does not retrieve everything.
+
+It attempts to find:
+
+\[
+\boxed{
+\text{Most relevant memories for the current query}
+}
+\]
+
+Common signals include:
+
+```text
+Vector similarity
+Keyword search
+Metadata filtering
+Hybrid search
+Reranking
+Recency
+Importance
+```
+
+---
+
+# 38. Recency + Relevance
+
+Suppose two memories are semantically similar:
+
+```text
+Memory A:
+Created yesterday.
+
+Memory B:
+Created two years ago.
+```
+
+A memory system may consider:
+
+```text
+Semantic relevance
++
+Recency
++
+Importance
+```
+
+to determine which information should enter the context.
+
+---
+
+# 39. Memory Lifecycle
+
+A complete memory system can be viewed as:
+
+```text
+Conversation
+     ↓
+Memory Extraction
+     ↓
+Memory Storage
+     ↓
+Memory Indexing
+     ↓
+Future Query
+     ↓
+Memory Retrieval
+     ↓
+Memory Ranking
+     ↓
+Context Injection
+     ↓
+LLM
+```
+
+---
+
+# 40. Memory Extraction
+
+Not every message should necessarily become long-term memory.
+
+For example:
+
+```text
+User:
+What is 2 + 2?
+```
+
+Probably no persistent memory is required.
+
+But:
+
+```text
+User:
+My project uses PostgreSQL and FastAPI.
+```
+
+may be useful later.
+
+Therefore an application can use rules or an LLM-based extraction process:
+
+```text
+Conversation
+    ↓
+Should this be remembered?
+    ↓
+Yes / No
+    ↓
+If yes → store memory
+```
+
+---
+
+# 41. Memory Storage Architecture
+
+A possible production architecture:
+
+```text
+                    Application
+                         │
+                         ▼
+                    FastAPI
+                         │
+              ┌──────────┼──────────┐
+              ▼          ▼          ▼
+           Redis       SQL DB    Vector DB
+              │          │          │
+           Cache      Messages    Memories
+```
+
+For example:
+
+```text
+SQL:
+conversation messages
+
+Redis:
+recent state / cache / events
+
+Vector DB:
+semantic memories
+```
+
+The exact architecture depends on the application.
+
+---
+
+# 42. Practical Memory-Based Chatbot Architecture
+
+A memory-based chatbot could look like:
+
+```text
+                 User
+                  │
+                  ▼
+             Chat UI
+                  │
+                  ▼
+               FastAPI
+                  │
+        ┌─────────┼─────────┐
+        ▼         ▼         ▼
+      Redis    SQL DB    Vector DB
+        │         │          │
+      Cache    History    Memories
+        │         │          │
+        └─────────┼──────────┘
+                  ▼
+             Context Builder
+                  │
+                  ▼
+                 LLM
+                  │
+                  ▼
+              Response
+```
+
+---
+
+# 43. Memory Does Not Change the LLM's Weights
+
+Suppose:
+
+```text
+Before conversation:
+Model weights = W
+```
+
+User says:
+
+```text
+My name is Alex.
+```
+
+The application stores:
+
+```text
+Alex
+```
+
+The model weights remain:
+
+\[
+W
+\]
+
+There is no training step.
+
+Therefore:
+
+```text
+Conversation memory
+      ↓
+Does NOT normally update model weights
+```
+
+Instead:
+
+```text
+Memory
+ ↓
+Retrieved
+ ↓
+Added to context
+```
+
+---
+
+# 44. Memory vs Fine-tuning
+
+## Memory
+
+```text
+Store information
+ ↓
+Retrieve later
+ ↓
+Put into context
+```
+
+No model-weight update.
+
+## Fine-tuning
+
+```text
+Training examples
+ ↓
+Loss
+ ↓
+Backpropagation
+ ↓
+Update model weights
+```
+
+These are fundamentally different mechanisms.
+
+---
+
+# 45. Memory vs RAG vs Fine-tuning
+
+| Technique | Main purpose |
+|---|---|
+| Conversation memory | Remember relevant user/conversation information |
+| RAG | Retrieve external knowledge |
+| Fine-tuning | Change/adapt model behavior or capabilities |
+| Prompting | Control behavior through context/instructions |
+
+A production system can combine all four.
+
+---
+
+# 46. Complete Multi-turn Architecture
+
+```text
+                         USER
+                           │
+                           ▼
+                    Current Message
+                           │
+              ┌────────────┴────────────┐
+              │                         │
+              ▼                         ▼
+       Recent History            Memory Retrieval
+              │                         │
+              │                    Vector / SQL
+              │                         │
+              └────────────┬────────────┘
+                           ▼
+                     Context Builder
+                           │
+              ┌────────────┼────────────┐
+              ▼            ▼            ▼
+           System       Memories      History
+              │            │            │
+              └────────────┼────────────┘
+                           ▼
+                      Chat Template
+                           │
+                           ▼
+                        Tokenizer
+                           │
+                           ▼
+                       Transformer
+                           │
+                           ▼
+                    Next-token logits
+                           │
+                           ▼
+                     Decoding strategy
+                           │
+                           ▼
+                       Response
+                           │
+                 ┌─────────┴─────────┐
+                 ▼                   ▼
+            Store message       Extract memory
+                 │                   │
+                 └─────────┬─────────┘
+                           ▼
+                     Memory Store
+```
+
+---
+
+# 47. Key Concept: Context Engineering
+
+Context Engineering asks:
+
+> What information should we put into the model's context, in what order, and within what token budget?
+
+For example:
+
+```text
+System instructions
+       ↓
+Important memories
+       ↓
+Retrieved documents
+       ↓
+Recent conversation
+       ↓
+Current query
+```
+
+The quality of this context can strongly affect the model's response.
+
+---
+
+# 48. Context Management Strategies
+
+Common strategies include:
+
+### 1. Sliding window
+
+Keep recent messages.
+
+### 2. Summarization
+
+Compress old conversation.
+
+### 3. Retrieval
+
+Retrieve relevant old messages.
+
+### 4. Memory extraction
+
+Store important facts separately.
+
+### 5. Hybrid approach
+
+Combine several strategies.
+
+A production chatbot often uses a hybrid approach.
+
+---
+
+# 49. Most Important Mental Model
+
+Remember:
+
+```text
+              LLM
+               ▲
+               │
+          Context
+               ▲
+               │
+      ┌────────┴────────┐
+      │                 │
+Conversation         Memory
+ History           Retrieval
+      │                 │
+      └────────┬────────┘
+               │
+            Storage
+```
+
+The LLM does not need to permanently memorize every interaction.
+
+The application can retrieve the right information and provide it at inference time.
+
+---
+
+# 50. Training vs Memory
+
+### Training
+
+```text
+Dataset
+ ↓
+Model
+ ↓
+Loss
+ ↓
+Backpropagation
+ ↓
+Weights updated
+```
+
+### Memory
+
+```text
+Conversation
+ ↓
+Store
+ ↓
+Retrieve
+ ↓
+Context
+ ↓
+Model inference
+```
+
+Memory does not require retraining the model.
+
+---
+
+# 51. Self-Check Questions
+
+Before moving to Lesson 13, make sure you can answer:
+
+1. Does an LLM automatically remember every previous conversation?
+2. What is conversation history?
+3. What is a conversation turn?
+4. What is the context window?
+5. What is the difference between context and memory?
+6. What is short-term conversational memory?
+7. What is long-term memory?
+8. What is structured memory?
+9. What is semantic memory?
+10. Why are embeddings useful for memory?
+11. What is memory retrieval?
+12. How is memory related to RAG?
+13. How is memory different from fine-tuning?
+14. What is a chat template?
+15. Why are system/user/assistant roles important?
+16. Why can't we always send the entire conversation?
+17. What is a sliding-window strategy?
+18. What is conversation summarization?
+19. What is memory extraction?
+20. What is memory ranking?
+21. Why should irrelevant memories not be inserted into context?
+22. What is context budgeting?
+23. What is context engineering?
+24. How can SQL, Redis and a vector database have different roles?
+25. Does storing a memory normally update the model weights?
+26. What is the complete multi-turn chatbot pipeline?
+
+---
+
+# 52. Next Lesson — Context Engineering
+
+Next we go deeper into:
+
+> Given a limited context window, what information should we actually send to the LLM?
+
+Topics:
+
+```text
+Context Window
+      ↓
+Token Budget
+      ↓
+System Instructions
+      ↓
+Conversation History
+      ↓
+Memory
+      ↓
+RAG Documents
+      ↓
+Tool Results
+      ↓
+Context Ordering
+      ↓
+Compaction / Summarization
+      ↓
+Prompt Caching
+      ↓
+LLM
+```
+
+This is especially important for production-grade RAG and memory-based AI systems.

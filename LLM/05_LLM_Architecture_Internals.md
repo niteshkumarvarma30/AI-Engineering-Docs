@@ -1,231 +1,1391 @@
-# Lesson 5: LLM Architecture Internals
+# Lesson 05 — LLM Architecture Internals
 
-Welcome to Lesson 5 of the AI Engineering Interview Preparation course. In this lesson, we will peel back the layers of modern Large Language Models (LLMs) and examine their foundational architecture. While the original Transformer paper ("Attention Is All You Need") revolutionized NLP, today's state-of-the-art models like LLaMA, GPT-4, and Mistral employ several critical modifications to improve efficiency, stability, and scaling. 
+## Complete Modern Decoder-Only Transformer Architecture
 
-This lesson will focus on:
-1. The shift from Encoder-Decoder to Decoder-Only architectures.
-2. Modern normalization techniques (RMSNorm vs. LayerNorm).
-3. Advanced activation functions (SwiGLU).
-4. The mechanics and mathematics of the KV Cache.
+This lesson connects the previous concepts:
 
-By understanding these internals, you will be well-equipped to discuss model architecture choices, memory bottlenecks, and inference optimization strategies during your AI Engineering interviews.
-
----
-
-## 1. Architectural Paradigms: Decoder-Only vs. Encoder-Decoder
-
-The original Transformer was introduced in 2017 for machine translation, a classic sequence-to-sequence (seq2seq) task. It featured an Encoder to process the source language and a Decoder to generate the target language. However, the landscape has largely shifted towards Decoder-only models for most generative AI tasks.
-
-### 1.1 The Encoder-Decoder Architecture
-
-An Encoder-Decoder model (e.g., T5, BART) consists of two separate stacks of transformer blocks.
-
-**The Encoder:**
-- Processes the input sequence comprehensively.
-- Uses **bidirectional self-attention** (unmasked attention). Every token can attend to every other token (past and future) in the input sequence.
-- Output is a sequence of contextualized embeddings representing the entire input.
-
-**The Decoder:**
-- Generates the output sequence autoregressively (one token at a time).
-- Uses **masked self-attention** (causal attention) to prevent tokens from "looking ahead" at future tokens during generation.
-- Uses **cross-attention** to attend to the Encoder's output representations.
-
-**ASCII Diagram: Encoder-Decoder**
 ```text
-[Input Text] -> (Encoder: Bidirectional Attention) -> [Context Vectors]
-                                                             |
-                                                             v
-[Target Prefix] -> (Decoder: Masked Self-Attention) -> (Cross-Attention) -> [Output Probabilities]
+Tokenization
+     ↓
+Token IDs
+     ↓
+Token Embeddings
+     ↓
+Positional Information / RoPE
+     ↓
+Transformer Blocks
+     ↓
+Final Hidden States
+     ↓
+LM Head
+     ↓
+Logits
+     ↓
+Softmax
+     ↓
+Next Token
 ```
 
-**Pros:** Excellent for tasks where the entire input context is needed simultaneously before generation starts (e.g., translation, summarization).
-**Cons:** More complex, requires maintaining two separate sets of parameters, less efficient for open-ended text generation.
+The goal is to understand what happens to text inside a modern decoder-only LLM and how **training** differs from **inference**.
 
-### 1.2 The Decoder-Only Architecture
+---
 
-The Decoder-only architecture (e.g., GPT series, LLaMA series, Claude) simplifies the design by dropping the Encoder entirely.
+# Table of Contents
 
-- It consists of a single stack of transformer blocks.
-- It relies exclusively on **masked self-attention** (causal attention). 
-- To perform a task, the input prompt is simply prepended to the generated sequence. The model reads the prompt (using causal attention, though practically this can be optimized during the "pre-fill" phase) and continues predicting the next token.
+1. [Big Picture](#1-big-picture)
+2. [Decoder-Only Transformer](#2-decoder-only-transformer)
+3. [Why Is It Called Decoder-Only?](#3-why-is-it-called-decoder-only)
+4. [Input Example](#4-input-example)
+5. [Token Embedding](#5-token-embedding)
+6. [Position Information](#6-position-information)
+7. [Transformer Block](#7-transformer-block)
+8. [Why So Many Layers?](#8-why-so-many-layers)
+9. [RMSNorm](#9-rmsnorm)
+10. [Why Normalize?](#10-why-normalize)
+11. [Causal Self-Attention](#11-causal-self-attention)
+12. [Why Causal Masking?](#12-why-causal-masking)
+13. [Q K V](#13-q-k-v)
+14. [Attention Calculation](#14-attention-calculation)
+15. [Multi-Head Attention](#15-multi-head-attention)
+16. [Why Multiple Heads?](#16-why-multiple-heads)
+17. [Feed-Forward Network](#17-feed-forward-network)
+18. [Why Do We Need the FFN?](#18-why-do-we-need-the-ffn)
+19. [Residual Connections](#19-residual-connections)
+20. [One Complete Transformer Block](#20-one-complete-transformer-block)
+21. [What Happens After the Last Layer?](#21-what-happens-after-the-last-layer)
+22. [LM Head](#22-lm-head)
+23. [Logits](#23-logits)
+24. [Softmax](#24-softmax)
+25. [Next-Token Prediction](#25-next-token-prediction)
+26. [Training vs Inference](#26-training-vs-inference)
+27. [Training Parallelism](#27-training-parallelism)
+28. [Cross-Entropy Loss](#28-cross-entropy-loss)
+29. [Backpropagation](#29-backpropagation)
+30. [Inference Is Different](#30-inference-is-different)
+31. [Why Inference Is Sequential](#31-why-inference-is-sequential)
+32. [KV Cache](#32-kv-cache)
+33. [Why KV Cache Matters](#33-why-kv-cache-matters)
+34. [Complete Modern LLM Flow](#34-complete-modern-llm-flow)
+35. [Architecture vs Training vs Inference](#35-architecture-vs-training-vs-inference)
+36. [One-Sentence Mental Model](#36-one-sentence-mental-model)
+37. [What You Must Know](#37-what-you-must-know)
+38. [Self-Check Questions](#38-self-check-questions)
+39. [Next Lesson](#39-next-lesson)
 
-**ASCII Diagram: Decoder-Only**
+---
+
+# 1. Big Picture
+
+A simplified modern decoder-only LLM looks like:
+
 ```text
-[Prompt + Generated Text so far] -> (Masked Self-Attention) -> (Feed Forward) -> [Next Token Probabilities]
+                    INPUT TEXT
+                        │
+                        ▼
+                    Tokenizer
+                        │
+                        ▼
+                    Token IDs
+                        │
+                        ▼
+                 Token Embeddings
+                        │
+                        ▼
+                  Position / RoPE
+                        │
+                        ▼
+              ┌─────────────────────┐
+              │   Transformer Block │
+              │                     │
+              │   RMSNorm           │
+              │      ↓              │
+              │   Causal            │
+              │   Self-Attention    │
+              │      ↓              │
+              │   Residual          │
+              │      ↓              │
+              │   RMSNorm           │
+              │      ↓              │
+              │   FFN / SwiGLU       │
+              │      ↓              │
+              │   Residual          │
+              └─────────────────────┘
+                        │
+                        ▼
+                  Repeat N times
+                        │
+                        ▼
+                    Final RMSNorm
+                        │
+                        ▼
+                      LM Head
+                        │
+                        ▼
+                     Logits
+                        │
+                        ▼
+                    Softmax
+                        │
+                        ▼
+                  Next Token
 ```
 
-### 1.3 Why Did the Industry Shift to Decoder-Only?
-
-1. **Simplicity and Scaling:** Training a single stack of layers is conceptually simpler and easier to optimize across large distributed systems.
-2. **Zero-Shot/Few-Shot Capabilities:** It turns out that language modeling (predicting the next word) on massive datasets is a sufficiently powerful objective to learn world knowledge and reason. A decoder-only model naturally handles in-context learning.
-3. **Efficiency:** During generation, cross-attention in Encoder-Decoder models requires attending back to the encoder's outputs at every step. Decoder-only models unify the prompt and generated text into a single KV cache (discussed later), streamlining the inference process.
-4. **The "Prefix" Optimization:** Modern implementations can process the initial prompt in parallel (like an encoder) because all prompt tokens are known. This is known as the "pre-fill" phase, blurring the efficiency gap between bidirectional and causal attention for the input context.
+This is the high-level architecture you should understand before studying advanced inference optimization.
 
 ---
 
-## 2. Modern Architectural Choices
+# 2. Decoder-Only Transformer
 
-To train models at the scale of tens or hundreds of billions of parameters, researchers had to modify the original Transformer to improve training stability and computational efficiency. Two of the most significant changes are the adoption of RMSNorm and SwiGLU.
+There are three broad Transformer architecture families:
 
-### 2.1 Normalization: LayerNorm vs. RMSNorm
-
-Normalization is crucial in deep neural networks to prevent vanishing or exploding gradients and to ensure stable training.
-
-#### Layer Normalization (LayerNorm)
-The original Transformer used LayerNorm. For an input vector $$x$$, LayerNorm computes the mean $$\mu$$ and variance $$\sigma^2$$ of the elements in $$x$$, normalizes $$x$$, and then scales and shifts using learnable parameters $$\gamma$$ and $$\beta$$.
-
-$$ \mu = \frac{1}{d} \sum_{i=1}^{d} x_i $$
-$$ \sigma^2 = \frac{1}{d} \sum_{i=1}^{d} (x_i - \mu)^2 $$
-$$ LayerNorm(x) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \odot \gamma + \beta $$
-
-#### Root Mean Square Normalization (RMSNorm)
-RMSNorm is a simplified variant of LayerNorm that has become the standard in modern LLMs (e.g., LLaMA). The key insight behind RMSNorm is that the **scaling** aspect of normalization is crucial for success, while the **centering** (shifting by the mean) is often unnecessary and computationally expensive.
-
-RMSNorm drops the mean calculation and normalizes solely by the Root Mean Square (RMS).
-
-$$ RMS(x) = \sqrt{\frac{1}{d} \sum_{i=1}^{d} x_i^2} $$
-$$ RMSNorm(x) = \frac{x}{RMS(x) + \epsilon} \odot \gamma $$
-
-**Why RMSNorm?**
-- **Computational Efficiency:** It removes the calculation of the mean and the subtraction of the mean from every element, saving memory bandwidth and compute cycles. It is roughly 10-50% faster than LayerNorm in practice.
-- **Equivalent Performance:** Empirically, RMSNorm provides the same training stability and final model performance as LayerNorm.
-- **Pre-Norm vs. Post-Norm:** Note that modern LLMs almost universally use "Pre-Norm" (applying RMSNorm *before* the Attention and Feed-Forward sub-layers) rather than "Post-Norm" (applying it after the residual addition) to vastly improve training stability at scale.
-
-### 2.2 Activation Functions: SwiGLU
-
-The Feed-Forward Network (FFN) in a Transformer traditionally used ReLU (Rectified Linear Unit) or GELU (Gaussian Error Linear Unit). Modern architectures have largely shifted to GLU (Gated Linear Unit) variants, specifically SwiGLU.
-
-#### The Traditional FFN
-A standard FFN consists of two linear transformations with an activation function in between:
-
-$$ FFN(x) = \text{Activation}(x W_1 + b_1) W_2 + b_2 $$
-
-#### Gated Linear Units (GLU)
-A GLU introduces a gating mechanism. Instead of a single projection before the activation, it uses two parallel projections. One projection acts as the gate, controlling the information flow of the other projection via an element-wise multiplication.
-
-$$ GLU(x, W, V, b, c) = \sigma(xW + b) \odot (xV + c) $$
-
-#### SwiGLU
-SwiGLU replaces the Sigmoid activation $$\sigma$$ in a standard GLU with the Swish activation function (specifically, Swish with $$\beta=1$$, which is also called SiLU - Sigmoid Linear Unit).
-
-$$ \text{Swish}(x) = x \cdot \sigma(\beta x) $$
-$$ \text{SwiGLU}(x, W, V) = \text{Swish}(xW) \odot (xV) $$
-
-The final FFN layer using SwiGLU (omitting biases, which are often removed in modern LLMs) looks like:
-
-$$ FFN_{SwiGLU}(x) = (\text{Swish}(xW_1) \odot xV_1) W_2 $$
-
-*Note: Because SwiGLU requires three weight matrices ($$W_1, V_1, W_2$$) instead of two, the hidden dimension of the FFN is typically reduced (e.g., from $$4d$$ to $$\frac{8}{3}d$$) to keep the total parameter count constant compared to a standard FFN.*
-
-**Why SwiGLU?**
-- **Empirical Superiority:** Papers like "GLU Variants Improve Transformer" (Shazeer, 2020) demonstrated that GLU variants, and SwiGLU in particular, consistently outperform ReLU and GELU across various tasks and scales.
-- **Smoothness and Non-Monotonicity:** The Swish function is smooth and non-monotonic (it dips slightly below zero for small negative inputs). This property helps gradients flow better during training.
-- **Multiplicative Interactions:** The gating mechanism ($$\odot$$) allows the model to learn more complex, multiplicative relationships between features within the FFN.
-
----
-
-## 3. Deep Dive: The KV Cache
-
-Understanding the KV (Key-Value) Cache is arguably the most important concept for anyone deploying or optimizing LLM inference. It is the primary bottleneck for memory and throughput in production systems.
-
-### 3.1 The Autoregressive Generation Problem
-
-LLMs generate text autoregressively: they predict token $$t$$ based on tokens $$1$$ to $$t-1$$. Then, to predict token $$t+1$$, they use tokens $$1$$ to $$t$$.
-
-A naive implementation of generation would recalculate the self-attention for *all* previous tokens at every step.
-
-**Naive Generation (Step-by-Step):**
-- Step 1: Input `["The", "cat"]`. Model computes Keys ($$K$$) and Values ($$V$$) for "The" and "cat". Computes Query ($$Q$$) for "cat". Attends. Outputs "sat".
-- Step 2: Input `["The", "cat", "sat"]`. Model computes $$K$$ and $$V$$ for "The", "cat", and "sat". Computes $$Q$$ for "sat". Attends. Outputs "on".
-- Step 3: Input `["The", "cat", "sat", "on"]`. Model computes $$K$$ and $$V$$ for "The", "cat", "sat", "and "on". Computes $$Q$$ for "on". Attends. Outputs "the".
-
-Notice the massive redundant computation. At Step 3, we are recomputing the Keys and Values for "The", "cat", and "sat", which we already computed in Steps 1 and 2!
-
-### 3.2 What is the KV Cache?
-
-The KV Cache is an inference optimization technique that stores the previously computed Keys and Values for all past tokens in the sequence. 
-
-Because causal attention ensures that past tokens cannot attend to future tokens, the Keys and Values for token $$i$$ depend *only* on the input up to token $$i$$. Therefore, once we compute $$K_i$$ and $$V_i$$, they will never change during the generation of the rest of the sequence.
-
-**Optimized Generation with KV Cache:**
-- Step 1 (Prefill): Input `["The", "cat"]`. Model computes $$K, V$$ for "The", "cat". **Caches them.** Outputs "sat".
-- Step 2 (Decode): Input `["sat"]` (only the new token!). Model computes $$K, V$$ for "sat". **Appends to Cache.** Model computes $$Q$$ for "sat". Computes attention using $$Q_{sat}$$ and the *entire* cached $$K, V$$ (`["The", "cat", "sat"]`). Outputs "on".
-- Step 3 (Decode): Input `["on"]`. Model computes $$K, V$$ for "on". **Appends to Cache.** Model computes $$Q$$ for "on". Computes attention using $$Q_{on}$$ and cached $$K, V$$ (`["The", "cat", "sat", "on"]`). Outputs "the".
-
-**ASCII Diagram: KV Cache Mechanism**
 ```text
-Time Step T (Generating token T+1):
-
-Current Token (T) ---> [Linear Projections] ---> Q_T, K_T, V_T
-                                                   |    |
-                                                   v    v
-KV Cache Storage:                               [Append to Cache]
-[K_1, K_2, ..., K_T-1] <----------------------- [K_1, K_2, ..., K_T-1, K_T]
-[V_1, V_2, ..., V_T-1] <----------------------- [V_1, V_2, ..., V_T-1, V_T]
-
-Attention Calculation:
-Attention(Q_T, Cache_K, Cache_V) = Softmax( Q_T * (Cache_K)^T / sqrt(d) ) * Cache_V
+Encoder-only
+Decoder-only
+Encoder-Decoder
 ```
 
-### 3.3 The Two Phases of Inference
+Examples:
 
-Because of the KV Cache, LLM inference is fundamentally split into two distinct phases with very different computational profiles:
+```text
+BERT       → Encoder-only
+GPT-style  → Decoder-only
+T5         → Encoder-Decoder
+```
 
-1. **The Prefill Phase (Time to First Token - TTFT):**
-   - Processes the entire input prompt at once.
-   - Computes the initial KV cache for all prompt tokens.
-   - **Compute-Bound:** This phase relies on large matrix multiplications. It scales well with GPU Tensor Cores.
-2. **The Decode Phase (Time Per Output Token - TPOT):**
-   - Generates tokens one by one autoregressively.
-   - At each step, it processes a single token, updates the cache, and computes attention against the growing cache.
-   - **Memory-Bandwidth Bound:** The GPU compute is underutilized because it's waiting to load the massive KV Cache from HBM (High Bandwidth Memory) to the compute cores for *every single token generated*.
-
-### 3.4 KV Cache Memory Math
-
-The size of the KV cache grows linearly with the sequence length and batch size. Let's calculate the memory required.
-
-**Parameters per token in the cache:**
-For every token, we must store a Key vector and a Value vector for every layer and every attention head.
-
-$$ \text{Memory per token} = 2 \times n_{\text{layers}} \times n_{\text{heads}} \times d_{\text{head}} \times \text{bytes\_per\_param} $$
-
-Since $$n_{\text{heads}} \times d_{\text{head}} = d_{\text{model}}$$ (the hidden dimension), this simplifies to:
-
-$$ \text{Memory per token} = 2 \times n_{\text{layers}} \times d_{\text{model}} \times \text{bytes\_per\_param} $$
-
-*(Note: The factor of 2 is because we store both Keys and Values).*
-
-**Example Calculation: LLaMA-2 70B**
-- $$n_{\text{layers}} = 80$$
-- $$d_{\text{model}} = 8192$$
-- Data type: FP16 (2 bytes per parameter)
-
-$$ \text{Memory per token} = 2 \times 80 \times 8192 \times 2 \text{ bytes} = 2,621,440 \text{ bytes} \approx 2.6 \text{ MB/token} $$
-
-If you want to process a batch of 32 requests, each with a context length of 4,096 tokens:
-
-$$ \text{Total KV Cache Memory} = 32 \times 4096 \times 2.6 \text{ MB} \approx 340 \text{ GB} $$
-
-This is massive! The model weights for LLaMA-2 70B in FP16 take about 140 GB. In this scenario, the KV cache takes more than double the memory of the model weights themselves. This is why techniques like Grouped-Query Attention (GQA), Multi-Query Attention (MQA), PagedAttention (vLLM), and quantization are critical for serving LLMs efficiently.
+Modern generative LLMs are predominantly **decoder-only Transformers**.
 
 ---
 
-## 4. Typical Interview Questions
+# 3. Why Is It Called Decoder-Only?
 
-1. **"Explain the difference between an Encoder-Decoder and a Decoder-only architecture. Why did OpenAI and Meta choose Decoder-only for GPT-4 and LLaMA?"**
-   *Look for:* Understanding of bidirectional vs. causal attention. Mention of training simplicity, zero-shot scaling laws, and the efficiency of unifying the prefix and generation phases under a single architecture.
+A decoder-only LLM predicts the next token using previous tokens.
 
-2. **"What is the KV cache? Why is it essential for LLM inference?"**
-   *Look for:* Explanation of autoregressive generation. Without KV cache, time complexity per token is $$O(N^2)$$ where N is sequence length. KV cache reduces redundant computation by storing past keys and values, changing the bottleneck from compute to memory bandwidth.
+Example:
 
-3. **"How does the memory footprint of the KV cache scale? Can you derive the formula?"**
-   *Look for:* Mention of the formula: `2 * Layers * Hidden_Dim * Precision_Bytes * Seq_Len * Batch_Size`. Understanding that memory grows linearly with sequence length and batch size, eventually overtaking model weight memory in long-context or high-concurrency scenarios.
+```text
+The cat is
+```
 
-4. **"Why do modern models use RMSNorm instead of LayerNorm?"**
-   *Look for:* Understanding that LayerNorm does mean-centering and variance-scaling. RMSNorm drops the mean-centering, which is computationally expensive and empirically unnecessary for training stability, resulting in a 10-50% speedup for the normalization operation.
+The model predicts:
 
-5. **"What is the bottleneck during the prefill phase vs. the decode phase of LLM inference?"**
-   *Look for:* Prefill is compute-bound (large matrix multiplications for the prompt). Decode is memory-bandwidth bound (loading the ever-growing KV cache from GPU memory to compute units for a single token matrix-vector multiplication).
+```text
+sleeping
+```
 
-6. **"How does SwiGLU differ from a standard ReLU Feed-Forward Network?"**
-   *Look for:* Explanation of the Gated Linear Unit concept (two linear projections, one acting as a gate). Mention of the Swish activation function and how the gating mechanism allows for more expressive multiplicative interactions, leading to empirically better downstream performance.
+Then the sequence becomes:
+
+```text
+The cat is sleeping
+```
+
+The model predicts another token.
+
+The fundamental probability is:
+
+\[
+\boxed{
+P(x_t\mid x_1,x_2,\ldots,x_{t-1})
+}
+\]
+
+This is **causal language modeling**.
+
+---
+
+# 4. Input Example
+
+Suppose:
+
+```text
+"I love cats"
+```
+
+Tokenization:
+
+```text
+["I", "love", "cats"]
+```
+
+Token IDs:
+
+```text
+[10, 20, 30]
+```
+
+The model does not directly perform neural computation on these integers.
+
+They first go through an embedding layer.
+
+---
+
+# 5. Token Embedding
+
+The embedding matrix is:
+
+\[
+E\in\mathbb{R}^{V\times d}
+\]
+
+where:
+
+- \(V\) = vocabulary size
+- \(d\) = hidden dimension
+
+For each token:
+
+\[
+x_i=E[token_i]
+\]
+
+So:
+
+```text
+10 → embedding vector
+20 → embedding vector
+30 → embedding vector
+```
+
+The resulting sequence has shape:
+
+\[
+X\in\mathbb{R}^{T\times d}
+\]
+
+where:
+
+- \(T\) = sequence length
+- \(d\) = hidden dimension
+
+---
+
+# 6. Position Information
+
+A Transformer needs information about token order.
+
+Modern LLMs commonly use **RoPE — Rotary Position Embeddings**.
+
+A simplified older approach could be:
+
+```text
+Token embedding
+      +
+Position embedding
+      ↓
+Transformer input
+```
+
+RoPE is different. It applies position-dependent rotations to query/key representations used by attention.
+
+Conceptually:
+
+```text
+Token representations
+        ↓
+Q/K projections
+        ↓
+RoPE
+        ↓
+Attention
+```
+
+RoPE will be studied in detail in the positional encoding lesson.
+
+---
+
+# 7. Transformer Block
+
+A modern Transformer block can be represented approximately as:
+
+```text
+Input
+  │
+  ▼
+RMSNorm
+  │
+  ▼
+Causal Self-Attention
+  │
+  ▼
+Residual Addition
+  │
+  ▼
+RMSNorm
+  │
+  ▼
+Feed-Forward Network
+  │
+  ▼
+Residual Addition
+  │
+  ▼
+Output
+```
+
+This block is repeated many times.
+
+The exact ordering varies between architectures, but this is a useful modern pre-norm mental model.
+
+---
+
+# 8. Why So Many Layers?
+
+Suppose an LLM has:
+
+```text
+32 Transformer layers
+```
+
+Then:
+
+```text
+Embedding
+   ↓
+Layer 1
+   ↓
+Layer 2
+   ↓
+Layer 3
+   ↓
+...
+   ↓
+Layer 32
+   ↓
+Final hidden states
+```
+
+Each layer progressively transforms the representations.
+
+The deeper layers can build increasingly abstract and task-relevant representations.
+
+---
+
+# 9. RMSNorm
+
+Before attention, many modern LLMs normalize the hidden representation.
+
+A simplified RMSNorm calculation is:
+
+\[
+RMS(x)
+=
+\sqrt{
+\frac{1}{d}
+\sum_{i=1}^{d}x_i^2
++
+\epsilon
+}
+\]
+
+Then:
+
+\[
+\boxed{
+RMSNorm(x)
+=
+\frac{x}{RMS(x)}
+\odot\gamma
+}
+\]
+
+where:
+
+- \(\gamma\) = learned scale
+- \(\epsilon\) = small numerical stability constant
+
+---
+
+# 10. Why Normalize?
+
+Without normalization, activations can become poorly scaled as they pass through many layers.
+
+Normalization helps maintain stable numerical behavior.
+
+Modern LLMs commonly use RMSNorm rather than the original LayerNorm formulation.
+
+---
+
+# 11. Causal Self-Attention
+
+This is one of the most important concepts in a decoder-only LLM.
+
+For:
+
+```text
+I love cats
+```
+
+the model must not allow the representation at an earlier position to see future tokens during causal language modeling.
+
+Attention pattern:
+
+```text
+             I    love   cats
+
+I            ✓     ✗      ✗
+love         ✓     ✓      ✗
+cats         ✓     ✓      ✓
+```
+
+This is a **causal mask**.
+
+---
+
+# 12. Why Causal Masking?
+
+During training, we want:
+
+```text
+I        → predict love
+I love   → predict cats
+```
+
+The model must not see the target token from the future.
+
+Therefore:
+
+\[
+\boxed{
+Token_t\ can\ attend\ only\ to\ positions\leq t
+}
+\]
+
+In a causal attention score matrix, forbidden future positions are effectively assigned a very large negative value, commonly represented as:
+
+\[
+-\infty
+\]
+
+Before softmax:
+
+```text
+Allowed position → normal score
+Future position  → -∞
+```
+
+After softmax:
+
+\[
+e^{-\infty}=0
+\]
+
+Therefore future tokens receive zero attention probability.
+
+---
+
+# 13. Q, K, V
+
+After normalization, the model creates:
+
+\[
+Q=XW_Q
+\]
+
+\[
+K=XW_K
+\]
+
+\[
+V=XW_V
+\]
+
+where:
+
+- \(Q\) = Query
+- \(K\) = Key
+- \(V\) = Value
+
+A useful intuition:
+
+### Query
+
+> What information am I looking for?
+
+### Key
+
+> How should another token match against me?
+
+### Value
+
+> What information should I provide if I am attended to?
+
+These projections are learned parameters.
+
+---
+
+# 14. Attention Calculation
+
+The basic attention formula is:
+
+\[
+\boxed{
+Attention(Q,K,V)
+=
+softmax
+\left(
+\frac{QK^T}{\sqrt{d_k}}
++
+M
+\right)V
+}
+\]
+
+where:
+
+- \(QK^T\) produces attention compatibility scores
+- \(d_k\) is the key dimension
+- \(M\) is the attention mask
+
+For causal attention, future positions in \(M\) receive a large negative value.
+
+---
+
+# 15. Multi-Head Attention
+
+Modern Transformers normally use multiple attention heads.
+
+Suppose:
+
+```text
+Hidden dimension = 4096
+Number of heads = 32
+```
+
+Then, in a standard equal partition:
+
+\[
+d_{head}
+=
+\frac{4096}{32}
+=
+128
+\]
+
+Conceptually:
+
+```text
+                  Hidden State
+                       │
+          ┌────────────┼────────────┐
+          ▼            ▼            ▼
+        Head 1       Head 2       Head 32
+          │            │            │
+      Attention    Attention    Attention
+          │            │            │
+          └────────────┼────────────┘
+                       ▼
+                   Concatenate
+                       │
+                       ▼
+                Output Projection
+```
+
+---
+
+# 16. Why Multiple Heads?
+
+Different heads can learn different attention patterns.
+
+For example, one head may learn strong relationships between:
+
+```text
+pronoun ↔ noun
+```
+
+Another may focus on:
+
+```text
+verb ↔ subject
+```
+
+Another may capture:
+
+```text
+nearby tokens
+```
+
+Another may capture:
+
+```text
+long-range relationships
+```
+
+These roles are not manually assigned. The model learns useful patterns during training.
+
+---
+
+# 17. Feed-Forward Network
+
+After attention, the representation passes through a feed-forward network.
+
+A simple FFN can be represented as:
+
+\[
+FFN(x)
+=
+W_2\sigma(W_1x+b_1)+b_2
+\]
+
+Modern LLMs often use **SwiGLU-style** feed-forward networks instead of a simple ReLU FFN.
+
+Conceptually:
+
+```text
+Hidden state
+     ↓
+Linear projections
+     ↓
+Activation + gating
+     ↓
+Projection
+     ↓
+Output
+```
+
+---
+
+# 18. Why Do We Need the FFN?
+
+A useful conceptual distinction is:
+
+```text
+Attention:
+"Which other tokens should I use information from?"
+
+FFN:
+"How should I transform the information I now have?"
+```
+
+Attention allows information to move between token positions.
+
+The FFN performs nonlinear transformation of the resulting representation.
+
+---
+
+# 19. Residual Connections
+
+After attention, a residual connection adds the block input back to the transformed output.
+
+Conceptually:
+
+```text
+              ┌──────────────────┐
+              │                  │
+Input ────────┼──────► Attention │
+  │           │                  │
+  │           └────────┬─────────┘
+  │                    │
+  └────────── Add ◄────┘
+                    │
+                    ▼
+                 Output
+```
+
+Mathematically, in simplified form:
+
+\[
+X_1=X+Attention(X)
+\]
+
+The same idea is used around the FFN.
+
+Residual connections help information and gradients flow through deep networks.
+
+---
+
+# 20. One Complete Transformer Block
+
+A simplified modern pre-norm block:
+
+```text
+                 X
+                 │
+                 ├─────────────────────┐
+                 │                     │
+                 ▼                     │
+              RMSNorm                 │
+                 │                     │
+                 ▼                     │
+        Causal Self-Attention          │
+                 │                     │
+                 └──────────► ADD ◄────┘
+                              │
+                              ▼
+                             X'
+                              │
+                 ┌────────────┴────────────┐
+                 │                         │
+                 ▼                         │
+              RMSNorm                     │
+                 │                         │
+                 ▼                         │
+             SwiGLU / FFN                 │
+                 │                         │
+                 └────────────► ADD ◄──────┘
+                              │
+                              ▼
+                             X''
+```
+
+This structure is repeated across the model.
+
+---
+
+# 21. What Happens After the Last Layer?
+
+Suppose there are \(N\) Transformer layers.
+
+After layer \(N\):
+
+\[
+H\in\mathbb{R}^{T\times d}
+\]
+
+These are the final hidden states.
+
+Then:
+
+```text
+Final hidden states
+       ↓
+Final RMSNorm
+       ↓
+LM Head
+```
+
+---
+
+# 22. LM Head
+
+The LM head converts hidden representations into vocabulary scores.
+
+If:
+
+```text
+Hidden dimension = d
+Vocabulary size = V
+```
+
+then conceptually:
+
+\[
+W_{LM}\in\mathbb{R}^{d\times V}
+\]
+
+and:
+
+\[
+\boxed{
+Logits=HW_{LM}
+}
+\]
+
+The output shape is:
+
+\[
+[T,V]
+\]
+
+Each token position gets one score for every vocabulary token.
+
+---
+
+# 23. What Are Logits?
+
+Suppose the vocabulary contains:
+
+```text
+cat
+dog
+car
+tree
+...
+```
+
+The model might produce:
+
+```text
+cat  → 4.2
+dog  → 2.1
+car  → 0.7
+tree → -0.5
+```
+
+These are **logits**.
+
+They are raw scores, not probabilities.
+
+---
+
+# 24. Softmax
+
+Softmax converts logits into probabilities:
+
+\[
+P_i=
+\frac{e^{z_i}}
+{\sum_j e^{z_j}}
+\]
+
+For example:
+
+```text
+cat  → 0.72
+dog  → 0.18
+car  → 0.07
+tree → 0.03
+```
+
+The probabilities sum to:
+
+\[
+1
+\]
+
+---
+
+# 25. Next-Token Prediction
+
+The model then uses a decoding strategy.
+
+Common strategies include:
+
+```text
+Greedy
+Temperature sampling
+Top-k
+Top-p
+Min-p
+```
+
+Example:
+
+```text
+"The cat is"
+       ↓
+Transformer
+       ↓
+Logits
+       ↓
+Probabilities
+       ↓
+"sleeping"
+```
+
+The generated token is appended to the sequence.
+
+---
+
+# 26. Training vs Inference
+
+This distinction is extremely important.
+
+## Training
+
+The model receives a sequence containing the target tokens.
+
+Example:
+
+```text
+Input:
+I love cats
+```
+
+Training pairs can be viewed as:
+
+```text
+Context          Target
+
+I                love
+I love           cats
+I love cats      <EOS>
+```
+
+The causal mask ensures that each prediction only uses information available at or before that position.
+
+---
+
+# 27. Training Parallelism
+
+Suppose:
+
+```text
+Tokens:
+
+[I, love, cats, today]
+```
+
+The model can process the complete sequence in one forward pass.
+
+The causal pattern is:
+
+```text
+I       → I
+love    → I, love
+cats    → I, love, cats
+today   → I, love, cats, today
+```
+
+The model simultaneously produces predictions for all positions.
+
+Therefore Transformer training is highly parallelizable across sequence positions.
+
+This is a major difference from autoregressive generation.
+
+---
+
+# 28. Cross-Entropy Loss
+
+For next-token prediction:
+
+\[
+\boxed{
+\mathcal{L}
+=
+-\sum_t
+\log P(x_t\mid x_{<t})
+}
+\]
+
+Usually the loss is averaged over valid prediction positions.
+
+Example:
+
+```text
+Input:
+I love cats
+
+Targets:
+love cats <EOS>
+```
+
+The model produces:
+
+```text
+Position 1 → probability distribution for love
+Position 2 → probability distribution for cats
+Position 3 → probability distribution for <EOS>
+```
+
+The loss measures how much probability the model assigned to the correct targets.
+
+---
+
+# 29. Backpropagation
+
+After calculating the loss:
+
+```text
+Loss
+ ↓
+Backpropagation
+ ↓
+Gradients
+ ↓
+Optimizer
+ ↓
+Updated parameters
+```
+
+Parameters updated during training include:
+
+```text
+Token embeddings
+Attention projections
+FFN weights
+Normalization parameters
+LM head
+```
+
+and other architecture-specific parameters.
+
+---
+
+# 30. Inference Is Different
+
+Suppose the prompt is:
+
+```text
+I love
+```
+
+The model predicts:
+
+```text
+cats
+```
+
+Now the sequence becomes:
+
+```text
+I love cats
+```
+
+Then it predicts another token:
+
+```text
+I love cats today
+```
+
+Then:
+
+```text
+I love cats today <EOS>
+```
+
+Generation is therefore **autoregressive**.
+
+---
+
+# 31. Why Inference Is Sequential
+
+During inference, the correct future tokens are unknown.
+
+The model has to generate them one at a time:
+
+```text
+Step 1 → generate token 1
+Step 2 → generate token 2
+Step 3 → generate token 3
+...
+```
+
+Therefore generation cannot simply process all future positions in parallel in the same way as training.
+
+This sequential dependency is a major source of generation latency.
+
+---
+
+# 32. KV Cache
+
+KV Cache is one of the most important inference concepts.
+
+Without KV caching, when generating a new token, the model would repeatedly recompute the keys and values for previous tokens.
+
+Instead, the model stores them.
+
+```text
+Previous tokens
+      ↓
+Past K and V
+      ↓
+KV Cache
+```
+
+When a new token arrives:
+
+```text
+New token
+   ↓
+New Q, K, V
+   ↓
+Q attends to cached K
+   ↓
+Use cached V
+```
+
+The exact implementation depends on the model and attention variant, but this is the core idea.
+
+---
+
+# 33. Why KV Cache Matters
+
+Suppose the generated context is:
+
+```text
+I love cats
+```
+
+The cache conceptually stores:
+
+```text
+I       → K,V
+love    → K,V
+cats    → K,V
+```
+
+For the next generated token, the model does not need to recompute the previous tokens' K/V projections from scratch.
+
+It computes the new token's K/V and uses the stored history.
+
+Therefore:
+
+\[
+\boxed{
+KV\ Cache
+=
+stored\ past\ Key/Value\ representations
+}
+\]
+
+---
+
+# 34. Complete Modern LLM Flow
+
+```text
+                    TEXT
+                     │
+                     ▼
+                 TOKENIZER
+                     │
+                     ▼
+                  TOKEN IDs
+                     │
+                     ▼
+              TOKEN EMBEDDINGS
+                     │
+                     ▼
+               POSITION / RoPE
+                     │
+                     ▼
+          ┌────────────────────────┐
+          │ Transformer Layer 1    │
+          │                        │
+          │ RMSNorm                │
+          │ ↓                      │
+          │ Causal Self-Attention  │
+          │ ↓                      │
+          │ Residual               │
+          │ ↓                      │
+          │ RMSNorm                │
+          │ ↓                      │
+          │ SwiGLU / FFN           │
+          │ ↓                      │
+          │ Residual               │
+          └───────────┬────────────┘
+                      ▼
+                 Layer 2
+                      │
+                     ...
+                      │
+                      ▼
+                 Layer N
+                      │
+                      ▼
+                 Final RMSNorm
+                      │
+                      ▼
+                    LM Head
+                      │
+                      ▼
+                    Logits
+                      │
+                      ▼
+                   Softmax
+                      │
+                      ▼
+                Next Token
+```
+
+---
+
+# 35. Architecture vs Training vs Inference
+
+Keep these three concepts separate.
+
+## Architecture
+
+What components exist?
+
+```text
+Embedding
+RoPE / positional mechanism
+Attention
+RMSNorm
+FFN
+Residual connections
+LM Head
+```
+
+## Training
+
+How are parameters learned?
+
+```text
+Tokens
+ ↓
+Forward pass
+ ↓
+Logits
+ ↓
+Loss
+ ↓
+Backpropagation
+ ↓
+Optimizer
+ ↓
+Updated weights
+```
+
+## Inference
+
+How does the trained model generate text?
+
+```text
+Prompt
+ ↓
+Forward pass
+ ↓
+Logits
+ ↓
+Sampling / decoding
+ ↓
+New token
+ ↓
+KV Cache
+ ↓
+Repeat
+```
+
+---
+
+# 36. One-Sentence Mental Model
+
+A modern decoder-only LLM:
+
+> **Turns token IDs into vectors, repeatedly mixes contextual information using causal self-attention and transforms it with feed-forward networks, then converts the final representations into vocabulary logits to predict the next token.**
+
+---
+
+# 37. What You Must Know
+
+You should be able to explain this complete chain:
+
+```text
+Tokenization
+      ↓
+Token IDs
+      ↓
+Embedding
+      ↓
+Position / RoPE
+      ↓
+RMSNorm
+      ↓
+Causal Self-Attention
+      ↓
+Multi-Head Attention
+      ↓
+Residual
+      ↓
+RMSNorm
+      ↓
+SwiGLU / FFN
+      ↓
+Residual
+      ↓
+Repeat N times
+      ↓
+Final RMSNorm
+      ↓
+LM Head
+      ↓
+Logits
+      ↓
+Softmax
+      ↓
+Next Token
+```
+
+And you should understand the major training/inference distinction:
+
+```text
+TRAINING
+
+Whole sequence available
+        ↓
+Causal mask
+        ↓
+Parallel forward pass
+        ↓
+Loss
+        ↓
+Backpropagation
+        ↓
+Weight update
+
+
+INFERENCE
+
+Prompt
+  ↓
+Generate one token
+  ↓
+KV Cache
+  ↓
+Generate next token
+  ↓
+KV Cache
+  ↓
+Generate next token
+  ↓
+...
+```
+
+---
+
+# 38. Self-Check Questions
+
+Before moving on, make sure you can answer:
+
+1. What is a decoder-only Transformer?
+2. Why are modern generative LLMs commonly decoder-only?
+3. What is causal language modeling?
+4. Why do we need causal masking?
+5. What is the difference between causal masking and padding masking?
+6. What is RMSNorm?
+7. Why is normalization used?
+8. What are Q, K, and V?
+9. What does \(QK^T\) calculate?
+10. Why divide attention scores by \(\sqrt{d_k}\)?
+11. What does the causal mask do before softmax?
+12. What is multi-head attention?
+13. Why use multiple heads?
+14. What is the role of the FFN?
+15. What is SwiGLU?
+16. Why are residual connections used?
+17. What is an LM head?
+18. What are logits?
+19. Why are logits not probabilities?
+20. What does softmax do?
+21. What is next-token prediction?
+22. Why can Transformer training process many positions in parallel?
+23. Why is autoregressive inference sequential?
+24. What is KV Cache?
+25. Why does KV Cache make inference faster?
+26. What parameters are updated during training?
+27. What is the difference between architecture, training, and inference?
+
+---
+
+# 39. Next Lesson
+
+## Lesson 06 — Positional Encodings
+
+The next lesson focuses deeply on **how Transformers represent position**.
+
+We will study:
+
+```text
+1. Why Transformers need position
+2. Absolute positional encoding
+3. Learned positional embeddings
+4. Sinusoidal positional encoding
+5. Relative position
+6. Rotary Position Embeddings (RoPE)
+7. RoPE numerical example
+8. Why RoPE rotates Q and K
+9. RoPE frequency calculation
+10. Long-context behavior
+11. Context extension
+12. RoPE vs sinusoidal vs learned positions
+```
+
+The most important modern concept will be:
+
+\[
+\boxed{
+RoPE
+}
+\]
+
+because it is widely used in modern decoder-only LLM architectures.

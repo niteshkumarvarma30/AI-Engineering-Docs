@@ -1,237 +1,1662 @@
-# Lesson 3: Tokenization Deep Dive
+# Lesson 03 — Tokenization Deep Dive
 
-Welcome to Lesson 3 of the AI Engineering Interview Preparation series. In this lesson, we will explore one of the most critical foundational components of Large Language Models (LLMs) and modern Natural Language Processing (NLP): **Tokenization**.
+## Learning Objectives
 
-Tokenization is the process of converting raw text into a sequence of discrete symbols (tokens) that a machine learning model can process. While it might seem like a simple pre-processing step, the choice of tokenization algorithm deeply impacts the vocabulary size, the model's ability to handle rare words, the context window utilization, and overall downstream performance.
+By the end of this lesson, you should be able to explain:
 
----
-
-## 1. The Out-Of-Vocabulary (OOV) Problem
-
-Before diving into modern algorithms, we must understand the problem they were designed to solve: the **Out-Of-Vocabulary (OOV)** problem.
-
-### 1.1 Word-Level Tokenization
-Early NLP systems relied on word-level tokenization, splitting text by spaces and punctuation. 
-For example: `"The quick brown fox jumps"` $\rightarrow$ `["The", "quick", "brown", "fox", "jumps"]`
-
-**The Problem:** 
-The number of possible words in any language is theoretically infinite due to morphological variations (e.g., "run", "running", "ran"), compound words, typos, and newly invented words. 
-If we restrict our model's vocabulary to the top $V$ most frequent words (e.g., $V = 30,000$), any word not in this vocabulary is replaced by an `<UNK>` (Unknown) token.
-If a user inputs `"I am neurodivergent"`, and `"neurodivergent"` is not in the vocabulary, the model sees `"I am <UNK>"`, losing critical semantic information. This is the OOV problem.
-
-### 1.2 Character-Level Tokenization
-To fix OOV, one could tokenize by individual characters.
-`"Fox"` $\rightarrow$ `["F", "o", "x"]`
-
-**The Problem:**
-1. **Loss of Semantic Meaning:** Individual characters hold little to no semantic meaning on their own, making it much harder for the model to learn representations.
-2. **Context Window Exhaustion:** A sentence of 20 words might turn into 100+ character tokens, rapidly consuming the LLM's limited context window and making self-attention computationally expensive ($O(N^2)$ complexity).
-
-### 1.3 The Solution: Subword Tokenization
-Subword tokenization strikes a balance between word-level and character-level tokenization. The core philosophy is:
-**"Frequent words should be single tokens, while rare words should be broken down into meaningful subword units."**
-
-For example, the rare word `"unhappiness"` might be tokenized into `["un", "happi", "ness"]`.
-Since the subwords `"un"`, `"happi"`, and `"ness"` are frequent across the corpus, they are kept in the vocabulary. If a completely novel word is encountered, it can always be broken down into individual characters as a last resort, completely eliminating the `<UNK>` token problem.
+- Why tokenization is required for LLMs
+- What a token is
+- Character-level, word-level, subword, and byte-level tokenization
+- Why modern LLMs generally use subword/byte-level approaches
+- BPE (Byte Pair Encoding)
+- WordPiece
+- SentencePiece
+- Byte-level tokenization
+- Vocabulary and token IDs
+- Special tokens such as BOS, EOS, PAD, UNK, and MASK
+- Padding and truncation
+- Attention masks and causal masks
+- Tokenizer training vs LLM training
+- Encoding and decoding
+- `input_ids` and `attention_mask`
+- Why token count affects LLM cost, latency, memory, and context length
 
 ---
 
-## 2. Byte-Pair Encoding (BPE)
+# 1. Why Do We Need Tokenization?
 
-Byte-Pair Encoding (BPE) was originally a data compression algorithm introduced in 1994. In 2015, Sennrich et al. adapted it for neural machine translation, making it the de facto standard for models like GPT-2, GPT-3, GPT-4, and RoBERTa.
+Neural networks operate on numerical tensors, not raw text.
 
-### 2.1 The BPE Algorithm
+A computer can receive:
 
-BPE is a frequency-based subword tokenization algorithm. It builds the vocabulary from the bottom up.
-
-**Initialization:**
-1. Pre-tokenize the training corpus into words (often using a simple space-based tokenizer).
-2. Append a special end-of-word symbol (like `</w>`) to each word to preserve word boundaries.
-3. Split all words into individual characters. This base set of characters forms the initial vocabulary $V$.
-
-**Iteration:**
-4. Count the frequency of all adjacent symbol pairs in the corpus.
-5. Find the most frequent pair of symbols (e.g., `A` and `B`).
-6. Merge this pair to create a new symbol `AB`.
-7. Add `AB` to the vocabulary $V$.
-8. Replace all occurrences of the pair `A B` in the corpus with the new symbol `AB`.
-9. Repeat steps 4-8 for a pre-defined number of iterations (merge operations), which determines the final vocabulary size.
-
-### 2.2 BPE Mathematical Representation & Example
-
-Let our corpus consist of the following words and their frequencies:
-- `"low</w>"` : 5
-- `"lower</w>"` : 2
-- `"newest</w>"` : 6
-- `"widest</w>"` : 3
-
-**Step 0: Character splits**
 ```text
-Vocabulary: { l, o, w, e, r, n, s, t, i, d, </w> }
-
-Corpus:
-5: l o w </w>
-2: l o w e r </w>
-6: n e w e s t </w>
-3: w i d e s t </w>
+"I love cats"
 ```
 
-**Step 1: Count pairs and merge**
-The most frequent pair is `e` and `s`. 
-- In `"newest</w>"`: 6 times
-- In `"widest</w>"`: 3 times
-Total frequency of `e s` = 9.
+but a Transformer cannot directly perform matrix multiplication on the characters in the string.
 
-We merge `e s` into `es`.
+So we convert:
+
 ```text
-Vocabulary: { ..., es }
-
-Corpus:
-5: l o w </w>
-2: l o w e r </w>
-6: n e w es t </w>
-3: w i d es t </w>
+Text
+ ↓
+Tokens
+ ↓
+Numbers
 ```
 
-**Step 2: Next most frequent pair**
-The pair `es` and `t` appears 9 times (`6 + 3`).
-Merge `es t` into `est`.
-```text
-Vocabulary: { ..., es, est }
+For example:
 
-Corpus:
+```text
+"I love cats"
+
+      ↓
+
+["I", "love", "cats"]
+
+      ↓
+
+[42, 817, 2917]
+```
+
+The numbers are called **token IDs**.
+
+Later:
+
+```text
+Token IDs
+    ↓
+Embedding lookup
+    ↓
+Vectors
+```
+
+---
+
+# 2. Complete LLM Input Pipeline
+
+Keep this pipeline in mind:
+
+```text
+                    RAW TEXT
+                       │
+                       ▼
+                   TOKENIZER
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+            Tokens          Token IDs
+                                │
+                                ▼
+                         Embedding Matrix
+                                │
+                                ▼
+                         Embedding Vectors
+                                │
+                                ▼
+                           Transformer
+```
+
+Tokenization happens **before embeddings**.
+
+---
+
+# 3. What Is a Token?
+
+A token is a unit of text selected by a tokenizer.
+
+A token does **not necessarily equal a word**.
+
+For example:
+
+```text
+"cat"
+```
+
+could become:
+
+```text
+["cat"]
+```
+
+while:
+
+```text
+"unbelievable"
+```
+
+could become something conceptually like:
+
+```text
+["un", "believ", "able"]
+```
+
+The exact result depends on the tokenizer and vocabulary.
+
+---
+
+# 4. Tokenization Strategies
+
+The major approaches are:
+
+```text
+Character-level
+      ↓
+Word-level
+      ↓
+Subword-level
+      ↓
+Byte-level
+```
+
+Modern LLMs generally use some form of **subword or byte-level tokenization**.
+
+---
+
+# 5. Character-Level Tokenization
+
+The simplest approach is to treat each character as a token.
+
+Example:
+
+```text
+"cat"
+```
+
+becomes:
+
+```text
+["c", "a", "t"]
+```
+
+Then:
+
+```text
+["c", "a", "t"]
+       ↓
+[12, 5, 19]
+```
+
+## Advantages
+
+- Very small vocabulary
+- Can represent arbitrary text when the character set is sufficiently broad
+
+## Problems
+
+Sequences become very long.
+
+For:
+
+```text
+"machine learning"
+```
+
+we may need many tokens.
+
+Longer sequences increase Transformer computation.
+
+---
+
+# 6. Word-Level Tokenization
+
+Another approach is to make each word a token.
+
+```text
+"I love cats"
+```
+
+becomes:
+
+```text
+["I", "love", "cats"]
+```
+
+This looks attractive, but there is a major problem: vocabulary size and rare/unknown words.
+
+---
+
+# 7. The Vocabulary Problem
+
+Imagine a vocabulary containing:
+
+```text
+cat
+dog
+house
+computer
 ...
-6: n e w est </w>
-3: w i d est </w>
 ```
 
-**Step 3: Next most frequent pair**
-The pair `est` and `</w>` appears 9 times.
-Merge `est </w>` into `est</w>`.
-
-This process continues until the desired vocabulary size is reached.
-
-### 2.3 BPE ASCII Diagram
+What happens when the tokenizer sees:
 
 ```text
-[ INITIAL STATE ]
-Corpus Words:   [ l, o, w, </w> ] (5) | [ n, e, w, e, s, t, </w> ] (6)
-Freq Pairs:     (e, s): 9, (s, t): 9, (l, o): 7 ...
+electromagnetically
+```
 
-       |
-       | Merge (e, s) -> es
-       v
+If the complete word is not in the vocabulary, we need another strategy.
 
-[ ITERATION 1 ]
-Corpus Words:   [ l, o, w, </w> ] (5) | [ n, e, w, es, t, </w> ] (6)
-Freq Pairs:     (es, t): 9, (l, o): 7 ...
+A traditional solution is:
 
-       |
-       | Merge (es, t) -> est
-       v
+```text
+[UNK]
+```
 
-[ ITERATION 2 ]
-Corpus Words:   [ l, o, w, </w> ] (5) | [ n, e, w, est, </w> ] (6)
+which means:
+
+> Unknown token.
+
+This loses useful information.
+
+---
+
+# 8. The Rare-Word Problem
+
+Consider:
+
+```text
+happy
+happier
+happiest
+unhappy
+unhappiness
+unhappily
+```
+
+A word-level tokenizer would need many separate vocabulary entries.
+
+There are enormous numbers of possible word forms.
+
+This motivates **subword tokenization**.
+
+---
+
+# 9. Subword Tokenization
+
+Instead of requiring every complete word to be in the vocabulary, we break words into reusable pieces.
+
+For example:
+
+```text
+unhappiness
+```
+
+could conceptually become:
+
+```text
+["un", "happi", "ness"]
+```
+
+Now pieces can be reused across many words.
+
+For example:
+
+```text
+unhappy
+unusual
+unknown
+```
+
+can share subword pieces.
+
+---
+
+# 10. Why Subword Tokenization Is Powerful
+
+It provides a useful balance:
+
+```text
+Character-level
+     │
+     │ Small vocabulary
+     │ Very long sequences
+     ▼
+Subword
+     │
+     │ Balanced
+     ▼
+Word-level
+     │
+     │ Large vocabulary
+     │ Unknown-word problem
+```
+
+Modern language models generally use tokenization strategies based on this principle.
+
+---
+
+# 11. BPE — Byte Pair Encoding
+
+One of the most important tokenization algorithms is:
+
+> **BPE — Byte Pair Encoding**
+
+The basic idea is:
+
+> Start with small units and repeatedly merge frequently occurring pairs.
+
+---
+
+# 12. Simple BPE Intuition
+
+Suppose training data contains:
+
+```text
+low
+lower
+lowest
+```
+
+Initially, we could represent the strings using small units:
+
+```text
+l o w
+l o w e r
+l o w e s t
+```
+
+Suppose:
+
+```text
+l + o
+```
+
+occurs frequently.
+
+BPE can merge them:
+
+```text
+lo
+```
+
+Then:
+
+```text
+lo + w
+```
+
+could become:
+
+```text
+low
+```
+
+Eventually, frequently occurring patterns become useful tokens.
+
+---
+
+# 13. BPE Training Process
+
+A simplified BPE training process is:
+
+```text
+Raw training text
+       ↓
+Initial small vocabulary
+       ↓
+Count adjacent pairs
+       ↓
+Find a frequent/useful pair
+       ↓
+Merge pair
+       ↓
+Update vocabulary
+       ↓
+Repeat
+       ↓
+Learned vocabulary + merge rules
+```
+
+For example:
+
+```text
+"t" + "h"
+```
+
+might become:
+
+```text
+"th"
+```
+
+and later a larger frequently occurring unit may be formed.
+
+The exact merge sequence depends on the tokenizer training data and algorithm.
+
+---
+
+# 14. BPE Is Not Simply "Split Long Words"
+
+A trained BPE tokenizer does not merely use a rule like:
+
+```text
+if word is long:
+    split it
+```
+
+Instead, it learns a vocabulary and merge/ranking rules from training data.
+
+Therefore tokenization is **data-dependent**.
+
+---
+
+# 15. BPE Example
+
+Suppose the tokenizer learns reusable units such as:
+
+```text
+low
+er
+est
+```
+
+Then it might tokenize:
+
+```text
+lower
+ ↓
+low + er
+```
+
+and:
+
+```text
+lowest
+ ↓
+low + est
+```
+
+The exact tokens depend on the learned vocabulary.
+
+---
+
+# 16. WordPiece
+
+Another important tokenization method is:
+
+> **WordPiece**
+
+It is strongly associated with BERT-style models.
+
+Its goal is similar:
+
+> Build a useful subword vocabulary that represents text efficiently.
+
+Conceptually:
+
+```text
+Word
+ ↓
+Subword pieces
+ ↓
+Token IDs
+```
+
+A tokenizer could represent:
+
+```text
+playing
+```
+
+as something conceptually like:
+
+```text
+play + ##ing
+```
+
+The `##` convention is associated with common WordPiece implementations.
+
+The exact representation depends on the tokenizer.
+
+---
+
+# 17. BPE vs WordPiece
+
+They are related but not identical.
+
+| | BPE | WordPiece |
+|---|---|---|
+| Basic idea | Merge token pairs | Learn useful subword units |
+| Famous association | GPT-style/tokenizer families | BERT |
+| Subword vocabulary | Yes | Yes |
+| Handles rare words | Better than word-level | Better than word-level |
+
+Do not reduce the difference to:
+
+> BPE = GPT and WordPiece = BERT.
+
+Modern tokenizer implementations are more varied.
+
+---
+
+# 18. SentencePiece
+
+Another important technology is:
+
+> **SentencePiece**
+
+SentencePiece can tokenize text without requiring traditional whitespace-based word segmentation.
+
+This is useful for languages where whitespace isn't a reliable word boundary.
+
+For example:
+
+```text
+English:
+I love cats
+```
+
+has spaces between words, while many other writing systems do not use spaces in the same way.
+
+SentencePiece can operate directly on the input sequence.
+
+---
+
+# 19. SentencePiece Is a Framework
+
+A subtle but important point:
+
+**SentencePiece is a tokenization library/framework**, not one single algorithm.
+
+It can support approaches such as:
+
+```text
+SentencePiece
+   ├── BPE
+   └── Unigram
+```
+
+Therefore:
+
+```text
+SentencePiece ≠ only BPE
 ```
 
 ---
 
-## 3. WordPiece
+# 20. Byte-Level Tokenization
 
-WordPiece was developed by Google and is famously used in BERT and Electra. While structurally similar to BPE, WordPiece differs in its merging criterion.
+Modern tokenizers can also operate at the byte level.
 
-### 3.1 The WordPiece Algorithm
+The basic idea is:
 
-Instead of merging the most *frequently occurring* pair, WordPiece merges the pair that maximizes the likelihood of the language model's training data. In simpler terms, it evaluates pairs based on a **score** rather than raw frequency.
+```text
+Text
+ ↓
+UTF-8 bytes
+ ↓
+Tokenization
+ ↓
+Tokens
+```
 
-The score for merging symbol $A$ and symbol $B$ into $AB$ is calculated as:
+This gives the tokenizer a robust way to represent arbitrary text.
 
-$$ \text{Score}(A, B) = \frac{\text{Frequency}(A, B)}{\text{Frequency}(A) \times \text{Frequency}(B)} $$
+It can be useful for:
 
-Alternatively, expressed via probabilities:
-
-$$ \text{Score}(A, B) = \frac{P(AB)}{P(A) P(B)} $$
-
-**Why is this different from BPE?**
-This scoring mechanism evaluates the Mutual Information between two symbols. 
-If `A` and `B` appear together frequently, but `A` and `B` also appear very frequently on their own in other contexts, the denominator becomes large, lowering the score.
-WordPiece prefers merging pairs where the individual parts are rare on their own but highly likely to appear together. 
-
-### 3.2 WordPiece Prefixing (`##`)
-Unlike BPE which appends `</w>` to denote word ends, WordPiece typically uses a prefix `##` to denote that a subword is part of a larger word and not the beginning of a word.
-
-For example, the word `"unhappiness"` might be tokenized as:
-`["un", "##happi", "##ness"]`
-Here, `"un"` is a word starter, while `"##happi"` and `"##ness"` are continuations.
-
-### 3.3 Algorithm Steps
-1. Initialize the vocabulary with all single characters in the corpus.
-2. Build a language model on the training data using the current vocabulary.
-3. Evaluate all adjacent pairs and calculate the score: $\frac{P(AB)}{P(A) P(B)}$.
-4. Merge the pair with the highest score.
-5. Repeat until the target vocabulary size is reached.
+- Rare characters
+- Unicode
+- Misspellings
+- Code
+- Unusual strings
 
 ---
 
-## 4. SentencePiece
+# 21. Why Bytes Matter
 
-SentencePiece (developed by Google) addresses major engineering and linguistic limitations present in standard BPE and WordPiece implementations. Models like ALBERT, XLNet, T5, and LLaMA utilize SentencePiece (or variations of its concepts).
+Consider:
 
-### 4.1 Limitations of BPE and WordPiece
-1. **Pre-tokenization dependency:** BPE and WordPiece rely on an initial step to split text into words (usually by spaces).
-2. **Language limitation:** Not all languages use spaces to separate words (e.g., Chinese, Japanese, Thai). Standard BPE struggles here because pre-tokenization is non-trivial.
-3. **Reversibility:** In standard tokenization, converting tokens back to the original text (detokenization) can lose original formatting (like consecutive spaces).
+```text
+こんにちは
+```
 
-### 4.2 The SentencePiece Approach
+or:
 
-SentencePiece treats the input text as a raw stream of characters, **including spaces**. It does not require language-specific pre-tokenization.
+```text
+🚀
+```
 
-1. **Space as a Character:** SentencePiece replaces spaces with a special meta-character, typically ` ` (U+2581). 
-   For example: `"Hello World"` becomes `" Hello World"`.
-2. **Subword Modeling:** Once the text is formatted with the meta-symbol, SentencePiece can apply either the BPE algorithm or the **Unigram Language Model** algorithm under the hood to generate the vocabulary.
-3. **Lossless Tokenization:** Because spaces are preserved as a distinct character (` `), detokenization is perfectly lossless. You simply concatenate all tokens and replace ` ` with standard spaces.
+or:
 
-### 4.3 Unigram Language Model (Often used with SentencePiece)
-While SentencePiece can use BPE, it frequently utilizes the Unigram algorithm.
-- **Top-Down Approach:** Unlike BPE (which starts small and merges up), Unigram starts with a massively oversized vocabulary (e.g., all words and large subwords in the corpus).
-- **Pruning:** It iteratively removes (prunes) a percentage of the vocabulary (usually 20%) that causes the least increase in the overall loss of the language model.
-- **Probabilistic Tokenization:** Unigram assigns multiple valid tokenizations to a single string with different probabilities. During training, this enables **Subword Regularization**—randomly choosing different tokenizations for the same text to make the model more robust.
+```text
+some_weird_identifier_123
+```
 
----
+A robust tokenizer needs a way to represent text even when an exact word or character wasn't seen during tokenizer training.
 
-## 5. Tokenization Comparison Matrix
-
-| Feature | Byte-Pair Encoding (BPE) | WordPiece | SentencePiece |
-| :--- | :--- | :--- | :--- |
-| **Used By** | GPT-2, GPT-3, GPT-4, RoBERTa | BERT, Electra | T5, LLaMA, ALBERT, XLNet |
-| **Direction** | Bottom-up (merging) | Bottom-up (merging) | Usually Top-down (Unigram) or BPE |
-| **Merge Criterion** | Highest pair frequency | Highest likelihood $\frac{P(AB)}{P(A)P(B)}$ | Loss minimization (Unigram) |
-| **Space Handling** | Pre-tokenization required | Pre-tokenization required | Treats space as character ` ` |
-| **Language Agnostic**| No (relies on spaces) | No (relies on spaces) | Yes |
+Byte-level approaches provide a strong fallback mechanism.
 
 ---
 
-## 6. Typical Interview Questions
+# 22. Vocabulary
 
-If you are interviewing for an AI Engineer or NLP Research Scientist role, expect deep-dive questions on tokenization. Here are common questions and how to answer them:
+A tokenizer has a **vocabulary**.
 
-### Q1: Why do Large Language Models use subword tokenization instead of character or word-level tokenization?
-**Answer:** Word-level tokenization suffers from the Out-Of-Vocabulary (OOV) problem, where rare or morphologically complex words are replaced by `<UNK>`, losing semantic meaning. Character-level tokenization solves OOV but creates excessively long token sequences, destroying semantic coherence and quadratically increasing the computational cost of the self-attention mechanism. Subword tokenization (like BPE) strikes the optimal balance: frequent words remain single tokens, while rare words are broken into manageable, frequent subwords, fully eliminating the `<UNK>` problem while maintaining sequence efficiency.
+Suppose:
 
-### Q2: What is the exact mathematical difference between how BPE and WordPiece decide which tokens to merge?
-**Answer:** BPE merges based on strict **frequency**. It counts the occurrences of adjacent pairs $A$ and $B$, and merges the pair with the highest absolute count. WordPiece merges based on **likelihood score**, specifically calculating $\frac{P(AB)}{P(A)P(B)}$. WordPiece favors merging pairs that appear together frequently relative to how often they appear independently, effectively utilizing mutual information.
+```text
+Vocabulary size = 50,000
+```
 
-### Q3: Explain why SentencePiece is preferred for multilingual models.
-**Answer:** BPE and WordPiece rely on a pre-tokenization step that typically splits text by spaces to define word boundaries. However, languages like Chinese, Japanese, and Thai do not use spaces to separate words. SentencePiece treats the input as a raw Unicode stream and replaces spaces with a special meta-symbol (like ` `). Because it does not rely on language-specific pre-tokenizers, it can natively process and tokenize text across any language, making it ideal for multilingual models like mT5 or LLaMA.
+The vocabulary may conceptually look like:
 
-### Q4: What is Subword Regularization, and which tokenizer enables it?
-**Answer:** Subword Regularization is a data augmentation technique where a single piece of text is tokenized in multiple different valid ways during training. This prevents the model from overfitting to one specific sequence of subwords. The **Unigram algorithm** (often implemented via SentencePiece) enables this because it is a probabilistic model. Given a string, Unigram can output a distribution of possible token sequences, allowing us to sample different tokenizations for the same input across different training epochs.
+```text
+ID      Token
+----------------
+0       <pad>
+1       <bos>
+2       <eos>
+3       the
+4       a
+...
+918     cat
+1273    dog
+...
+```
 
-### Q5: If you train a BPE tokenizer on a corpus of medical documents, what happens if you apply it to a corpus of Shakespearean English?
-**Answer:** The tokenizer will produce a highly fragmented token sequence. Because the medical BPE model merged characters based on frequencies of medical terminology (e.g., merging "steth", "os", "cope"), it will not possess the subwords common in Shakespearean text (e.g., "thou", "hath", "doth"). Consequently, Shakespearean words will be aggressively split into very small subwords or even individual characters, drastically increasing the token sequence length and potentially degrading the LLM's understanding of the text.
-
-### Q6: Can a subword tokenizer output an `<UNK>` token?
-**Answer:** Theoretically, it shouldn't, as long as the base vocabulary is initialized with every single character (or byte) that exists in the dataset. If a completely unseen word appears, it is simply split into its constituent characters. However, if a character appears during inference that was *never* seen during training (and thus isn't in the base character vocab) or if the model doesn't use fallback-to-byte (like Byte-level BPE does), an `<UNK>` token could technically be generated. Modern models use Byte-level BPE (BBPE) mapping characters to 256 bytes, guaranteeing that literally any input can be tokenized without `<UNK>`.
+The exact IDs are tokenizer-specific.
 
 ---
-*End of Lesson 3*
+
+# 23. Token ID
+
+A **token ID** is an integer representing a token in the vocabulary.
+
+For example:
+
+```text
+"cat"
+ ↓
+918
+```
+
+The number `918` itself has no inherent semantic meaning.
+
+It means:
+
+> Use vocabulary entry 918.
+
+It can then be used to retrieve the corresponding embedding vector.
+
+---
+
+# 24. Token ID → Embedding
+
+Suppose:
+
+```text
+Token ID = 918
+```
+
+The model has an embedding matrix:
+
+\[
+E \in \mathbb{R}^{V\times d}
+\]
+
+where:
+
+- \(V\) = vocabulary size
+- \(d\) = embedding dimension
+
+Then:
+
+\[
+E[918]
+\]
+
+retrieves the vector associated with token 918.
+
+Conceptually:
+
+```text
+"cat"
+ ↓
+918
+ ↓
+Embedding matrix
+ ↓
+[0.12, -0.51, 0.83, ...]
+```
+
+This leads directly into **Lesson 04 — Embeddings & Token Representations**.
+
+---
+
+# 25. Token IDs Are Not Embeddings
+
+Do not confuse:
+
+```text
+Token ID
+```
+
+with:
+
+```text
+Token embedding
+```
+
+For example:
+
+```text
+"cat"
+   ↓
+918                  ← Token ID
+   ↓
+[0.12, -0.51, ...]  ← Embedding vector
+```
+
+The ID is an integer.
+
+The embedding is a high-dimensional vector.
+
+---
+
+# 26. Special Tokens
+
+Modern tokenizers often have special tokens.
+
+Important examples:
+
+| Token | Meaning |
+|---|---|
+| BOS | Beginning of sequence |
+| EOS | End of sequence |
+| PAD | Padding |
+| UNK | Unknown token |
+| MASK | Masked token |
+
+Not every model uses every special token.
+
+Always inspect the specific tokenizer configuration.
+
+---
+
+# 27. BOS — Beginning of Sequence
+
+BOS indicates the beginning of a sequence.
+
+Conceptually:
+
+```text
+<BOS> I love cats
+```
+
+Some modern decoder-only models do not necessarily use a separate BOS token in the same way.
+
+Therefore do not assume every tokenizer uses one.
+
+---
+
+# 28. EOS — End of Sequence
+
+EOS represents the end of a sequence.
+
+During generation:
+
+```text
+The cat is sleeping <EOS>
+```
+
+The generation system can stop when EOS is produced.
+
+EOS is one possible stopping mechanism.
+
+---
+
+# 29. PAD — Padding Token
+
+Batches often need sequences of equal length.
+
+Suppose:
+
+```text
+Sequence A:
+I love cats
+
+Sequence B:
+I love machine learning
+```
+
+They have different lengths.
+
+We can pad:
+
+```text
+I love cats <PAD> <PAD>
+
+I love machine learning
+```
+
+Now both can fit into the same tensor shape.
+
+---
+
+# 30. Why Padding Is Needed
+
+Suppose a batch contains:
+
+```text
+Sequence 1 → 4 tokens
+Sequence 2 → 6 tokens
+Sequence 3 → 5 tokens
+```
+
+We can pad them to length 6:
+
+```text
+Sequence 1 → token token token token PAD PAD
+Sequence 2 → token token token token token token
+Sequence 3 → token token token token token PAD
+```
+
+Then:
+
+```text
+Batch shape = [3, 6]
+```
+
+This makes efficient tensor processing possible.
+
+---
+
+# 31. Attention Mask and Padding
+
+Padding tokens should not normally contribute to attention as real tokens.
+
+So an attention mask can indicate which positions are valid.
+
+Example:
+
+```text
+Tokens:
+I love cats <PAD> <PAD>
+
+Mask:
+1  1    1     0     0
+```
+
+Typically:
+
+```text
+1 = valid token
+0 = padding
+```
+
+The exact convention can vary by library/API.
+
+---
+
+# 32. Padding Mask vs Causal Mask
+
+These are different concepts.
+
+## Padding Mask
+
+Prevents padding positions from being treated as normal content.
+
+```text
+Real tokens → valid
+PAD          → ignored
+```
+
+## Causal Mask
+
+Prevents a token from attending to future tokens.
+
+```text
+Token 1 → sees token 1
+Token 2 → sees token 1,2
+Token 3 → sees token 1,2,3
+```
+
+Therefore:
+
+\[
+\boxed{
+Padding\ Mask \neq Causal\ Mask
+}
+\]
+
+This distinction is extremely important.
+
+---
+
+# 33. Causal Attention Mask
+
+For a decoder-only LLM:
+
+```text
+             Key positions
+             1   2   3   4
+
+Query 1      ✓   ✗   ✗   ✗
+Query 2      ✓   ✓   ✗   ✗
+Query 3      ✓   ✓   ✓   ✗
+Query 4      ✓   ✓   ✓   ✓
+```
+
+A token cannot attend to future tokens.
+
+This allows causal language modeling.
+
+---
+
+# 34. Truncation
+
+Suppose a model supports:
+
+```text
+Context length = 2048 tokens
+```
+
+but your input contains:
+
+```text
+5000 tokens
+```
+
+You cannot simply provide all 5000 tokens if the model/configuration doesn't support that length.
+
+You may need:
+
+```text
+5000 tokens
+    ↓
+Truncate
+    ↓
+2048 tokens
+```
+
+This is called **truncation**.
+
+---
+
+# 35. Padding vs Truncation
+
+These are opposite operations.
+
+## Padding
+
+Makes sequences longer:
+
+```text
+100 tokens
+ ↓
+128 tokens
+```
+
+## Truncation
+
+Makes sequences shorter:
+
+```text
+5000 tokens
+ ↓
+2048 tokens
+```
+
+---
+
+# 36. Why Token Count Matters
+
+This is extremely important for AI engineering.
+
+Suppose two tokenizers represent the same prompt as:
+
+```text
+Tokenizer A → 1000 tokens
+Tokenizer B → 1400 tokens
+```
+
+The second tokenizer may require more:
+
+- Context capacity
+- Attention computation
+- KV-cache memory during generation
+- API usage/cost
+- Processing time
+
+Therefore tokenization is not merely preprocessing.
+
+It directly affects LLM efficiency.
+
+---
+
+# 37. Token Count Is Not Word Count
+
+Suppose you have:
+
+```text
+1,000 words
+```
+
+That does not necessarily mean:
+
+```text
+1,000 tokens
+```
+
+Depending on the language and tokenizer:
+
+```text
+Text length ≠ Token length
+```
+
+This matters for:
+
+- Context windows
+- Memory
+- Compute
+- API cost
+- Latency
+- KV cache
+- Prompt design
+
+---
+
+# 38. Tokenization Across Languages
+
+Tokenization efficiency differs across languages.
+
+For example, the same semantic amount of information may require different token counts depending on the tokenizer and language.
+
+This matters for:
+
+- Multilingual models
+- Context usage
+- Cost
+- Latency
+- Model performance
+
+---
+
+# 39. Tokenization of Numbers
+
+Numbers are tokenized according to the tokenizer's vocabulary and rules.
+
+For example:
+
+```text
+123456789
+```
+
+does not necessarily become one token.
+
+It may be represented as several pieces.
+
+This matters because the LLM does not inherently receive a number as a mathematical integer.
+
+It receives tokens.
+
+---
+
+# 40. Tokenization of Code
+
+Code is also tokenized.
+
+For example:
+
+```python
+print("Hello")
+```
+
+may be represented using several tokens for pieces such as:
+
+```text
+print
+(
+"
+Hello
+"
+)
+```
+
+The exact tokenization depends on the tokenizer.
+
+Tokenization efficiency therefore matters for coding models too.
+
+---
+
+# 41. Tokenization and Multilingual Text
+
+A tokenizer may need to represent:
+
+```text
+English
+Hindi
+Chinese
+Japanese
+Arabic
+Emoji
+Code
+URLs
+Numbers
+Symbols
+```
+
+Modern tokenizers therefore need broad coverage.
+
+Byte-level approaches can help ensure unusual inputs can still be represented.
+
+---
+
+# 42. Tokenizer Training vs Model Training
+
+This distinction is important.
+
+There are two different training processes.
+
+## Tokenizer Training
+
+Learns:
+
+```text
+Vocabulary
++
+Merge rules / tokenization model
+```
+
+## LLM Training
+
+Learns:
+
+```text
+Neural-network parameters
+```
+
+Conceptually:
+
+```text
+Tokenizer training
+      ↓
+Tokenizer
+      ↓
+Token IDs
+      ↓
+LLM training
+      ↓
+Model weights
+```
+
+The tokenizer and LLM are related but are not the same thing.
+
+---
+
+# 43. Tokenizer vs Embedding Matrix
+
+Another important distinction:
+
+```text
+Tokenizer
+   ↓
+Token ID
+```
+
+Then:
+
+```text
+Token ID
+   ↓
+Embedding matrix
+   ↓
+Vector
+```
+
+Therefore:
+
+\[
+\boxed{
+Tokenizer \neq Embedding
+}
+\]
+
+The tokenizer maps text to IDs.
+
+The embedding layer maps IDs to vectors.
+
+---
+
+# 44. Practical Hugging Face Tokenizer
+
+A typical Hugging Face workflow looks like:
+
+```python
+from transformers import AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained(
+    "model-name"
+)
+
+text = "I love machine learning"
+
+tokens = tokenizer.tokenize(text)
+
+token_ids = tokenizer.encode(text)
+
+print(tokens)
+print(token_ids)
+```
+
+Replace `"model-name"` with the tokenizer/model you want to inspect.
+
+---
+
+# 45. Encoding
+
+Encoding converts text into a token representation.
+
+```python
+token_ids = tokenizer.encode(text)
+```
+
+Conceptually:
+
+```text
+Text
+ ↓
+Tokenizer
+ ↓
+Token IDs
+```
+
+---
+
+# 46. Decoding
+
+Decoding performs the reverse transformation.
+
+```python
+text = tokenizer.decode(token_ids)
+```
+
+Conceptually:
+
+```text
+Token IDs
+    ↓
+Tokenizer
+    ↓
+Text
+```
+
+Example:
+
+```text
+[42, 817, 2917]
+        ↓
+"I love cats"
+```
+
+The exact result depends on the tokenizer.
+
+---
+
+# 47. Encoding vs Decoding
+
+Remember:
+
+```text
+Text
+ ↓ encode
+Token IDs
+ ↓ decode
+Text
+```
+
+Encoding and decoding are not the same as the neural network's forward and backward passes.
+
+They are tokenizer operations.
+
+---
+
+# 48. Hugging Face `tokenizer()` Output
+
+A tokenizer can return more than token IDs.
+
+For example:
+
+```python
+inputs = tokenizer(
+    "I love cats",
+    return_tensors="pt"
+)
+```
+
+Depending on the tokenizer/model, the output may contain:
+
+```text
+input_ids
+attention_mask
+```
+
+and potentially other fields.
+
+---
+
+# 49. `input_ids`
+
+Conceptually:
+
+```text
+input_ids =
+[101, 1045, 2293, 8870, 102]
+```
+
+These are token IDs.
+
+The actual values are tokenizer-specific.
+
+---
+
+# 50. `attention_mask`
+
+Example:
+
+```text
+input_ids:
+[101, 1045, 2293, 8870, 102, 0, 0]
+
+attention_mask:
+[ 1,    1,    1,    1,   1, 0, 0]
+```
+
+Typically:
+
+```text
+1 = valid token
+0 = padding
+```
+
+Follow the specific model/library convention.
+
+---
+
+# 51. Complete Practical Tokenization Pipeline
+
+```text
+Raw text
+   ↓
+Tokenizer
+   ↓
+Tokens
+   ↓
+Token IDs
+   ↓
+Attention mask
+   ↓
+Padding / truncation if required
+   ↓
+PyTorch tensor
+   ↓
+Embedding layer
+```
+
+Then:
+
+```text
+Embedding vectors
+   ↓
+Position information
+   ↓
+Transformer
+```
+
+---
+
+# 52. Important AI Engineer Insight
+
+Tokenization affects system performance.
+
+Suppose:
+
+```text
+Tokenizer A → 1000 tokens
+Tokenizer B → 1400 tokens
+```
+
+For the same prompt, the second representation can increase:
+
+- Context usage
+- Attention computation
+- KV-cache memory
+- API cost
+- Latency
+
+Therefore tokenization is part of **LLM systems engineering**, not just NLP preprocessing.
+
+---
+
+# 53. Tokenization and Context Window
+
+Suppose a model supports:
+
+```text
+128,000 tokens
+```
+
+This means **tokens**, not words.
+
+It does not mean:
+
+```text
+128,000 words
+```
+
+The number of characters or words that fit depends on tokenization.
+
+Therefore:
+
+\[
+\boxed{
+Context\ Window = Token\ Count
+}
+\]
+
+not raw character count.
+
+---
+
+# 54. Important Comparison
+
+| Concept | Meaning |
+|---|---|
+| Text | Human-readable input |
+| Token | Unit produced by tokenizer |
+| Token ID | Integer representing a token |
+| Vocabulary | Mapping between token pieces and IDs |
+| Tokenizer | Converts text ↔ token representation |
+| Embedding | Converts token ID into a dense vector |
+| Input IDs | Tensor containing token IDs |
+| Attention mask | Indicates which positions are valid/attendable |
+| Padding | Adds tokens to equalize sequence lengths |
+| Truncation | Removes tokens beyond allowed length |
+
+---
+
+# 55. Complete Mental Model
+
+```text
+                     RAW TEXT
+                        │
+                        ▼
+                    TOKENIZER
+                        │
+             ┌──────────┴──────────┐
+             │                     │
+             ▼                     ▼
+          TOKENS               TOKEN IDs
+                                   │
+                                   ▼
+                           EMBEDDING MATRIX
+                                   │
+                                   ▼
+                            EMBEDDING VECTORS
+                                   │
+                                   ▼
+                         POSITION INFORMATION
+                                   │
+                                   ▼
+                             TRANSFORMER
+```
+
+The tokenizer is the bridge between:
+
+```text
+Human language
+      ↓
+Machine-readable token representation
+```
+
+---
+
+# 56. What You Should Be Able to Explain
+
+You should now be able to explain:
+
+### Why tokenization exists
+
+Because neural networks need numerical representations.
+
+### Why not tokenize only by words
+
+Vocabulary becomes enormous and rare/unknown words become problematic.
+
+### Why subwords
+
+They balance vocabulary size and sequence length.
+
+### BPE
+
+Learns useful token merges from training data.
+
+### WordPiece
+
+Learns subword units and is strongly associated with BERT-style tokenization.
+
+### SentencePiece
+
+A tokenizer framework that can work without relying on whitespace word boundaries and can support methods such as BPE and Unigram.
+
+### Byte-level tokenization
+
+Uses byte-level representations to provide broad text coverage.
+
+### Token ID
+
+An integer index representing a token.
+
+### Embedding
+
+A learned vector corresponding to a token ID.
+
+### Padding
+
+Makes sequences in a batch the same length.
+
+### Truncation
+
+Cuts sequences that exceed an allowed length.
+
+### Attention mask
+
+Controls which positions are valid/attendable. Padding masks and causal masks serve different purposes.
+
+---
+
+# 57. Self-Check Questions
+
+Before moving to Lesson 04, you should be able to answer:
+
+1. Why can't a Transformer directly process raw text?
+2. What is a token?
+3. Why isn't a token always a complete word?
+4. What problem does word-level tokenization have?
+5. What is subword tokenization?
+6. What is BPE?
+7. What does BPE learn?
+8. What is WordPiece?
+9. What is SentencePiece?
+10. What is byte-level tokenization?
+11. What is a vocabulary?
+12. What is a token ID?
+13. Why does token ID `918` have no inherent semantic meaning?
+14. What is the difference between a token ID and an embedding?
+15. What is BOS?
+16. What is EOS?
+17. What is PAD?
+18. What is UNK?
+19. What is MASK?
+20. What is padding?
+21. What is truncation?
+22. What is an attention mask?
+23. What is the difference between padding mask and causal mask?
+24. Why does token count matter for LLM inference?
+25. Why can the same text produce different token counts with different tokenizers?
+26. What is the difference between tokenizer training and LLM training?
+27. What does `tokenizer.encode()` do?
+28. What does `tokenizer.decode()` do?
+29. What are `input_ids`?
+30. What is `attention_mask`?
+
+---
+
+# 58. Roadmap Progress
+
+```text
+PHASE 1 — LLM FOUNDATIONS
+
+01. What Are LLMs?                    ✅
+        ↓
+02. Generative AI: The Big Picture    ✅
+        ↓
+03. Tokenization Deep Dive            ✅
+        ↓
+04. Embeddings & Token Representations
+
+PHASE 2 — MODERN LLM ARCHITECTURE
+
+05. LLM Architecture Internals
+06. Positional Encodings
+07. Mixture of Experts
+08. Context Window & Attention Patterns
+
+PHASE 3 — LLM TRAINING & GENERATION
+
+09. Pre-training Objectives
+10. Logits, Softmax & Temperature
+11. Sampling Strategies
+12. Multi-turn Conversations & Memory
+```
+
+## Next Lesson
+
+**Lesson 04 — Embeddings & Token Representations**
+
+We will go from:
+
+```text
+Token ID
+   ↓
+Embedding Matrix
+   ↓
+Embedding Vector
+   ↓
+Contextual Representation
+   ↓
+Transformer
+```
+
+Topics will include:
+
+- Token embeddings
+- Embedding matrices
+- Embedding dimensions
+- Embedding lookup
+- `nn.Embedding` in PyTorch
+- Token representation vs contextual representation
+- Positional information
+- Hidden states
+- How representations change through Transformer layers
+- Static vs contextual embeddings

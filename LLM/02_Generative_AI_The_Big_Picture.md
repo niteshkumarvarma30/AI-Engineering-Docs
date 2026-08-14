@@ -1,303 +1,1301 @@
-# Lesson 2: Generative AI - The Big Picture
+# Lesson 02 — Generative AI: The Big Picture
 
-Welcome to Lesson 2 of the AI Engineering Interview Preparation Guide. In this comprehensive lesson, we will zoom out to thoroughly understand the landscape of Generative AI. We will cover the four fundamental pillars of modern generative modeling: Variational Autoencoders (VAEs), Generative Adversarial Networks (GANs), Diffusion Models, and Transformers.
+## Learning Objectives
 
-Understanding these foundational architectures, their mathematical objectives, their training dynamics, and their respective trade-offs is absolutely critical for any senior AI Engineering role. Interviewers will expect you to not only know what these models are but *why* they work mathematically and *when* to choose one over the other.
+By the end of this lesson, you should be able to explain:
 
----
-
-## 1. Discriminative vs. Generative Models
-
-Before diving into the specific architectures, it is crucial to clearly distinguish between discriminative and generative modeling paradigms in machine learning.
-
-### Discriminative Models
-Discriminative models aim to model the conditional probability distribution $P(Y|X)$, where $X$ is the input data and $Y$ is the target label.
-*   **Goal:** Learn the decision boundary between different classes.
-*   **Use Cases:** Image classification, sentiment analysis, object detection.
-*   **Example:** A ResNet model predicting whether an image contains a dog or a cat. It doesn't care how to create an image of a dog; it only cares about the features that distinguish it from a cat.
-
-### Generative Models
-Generative models aim to model the joint probability distribution $P(X, Y)$ or, more commonly in modern unsupervised learning, the probability distribution of the data itself $P(X)$.
-*   **Goal:** Learn the underlying distribution of the training data in order to sample from it and generate new, synthetic instances that realistically resemble the original data.
-*   **Use Cases:** Text generation, image synthesis, music generation, drug discovery (generating novel molecular structures).
-*   **Example:** Generating a completely new, photorealistic image of a dog that does not exist in the real world.
-
-Generative AI has seen a massive paradigm shift from early Restricted Boltzmann Machines (RBMs) to VAEs and GANs in the mid-2010s, and more recently, to the current state-of-the-art: Diffusion Models and Transformers.
+- What Generative AI is
+- The difference between generative and discriminative models
+- Where LLMs fit within Generative AI
+- What GANs are and how they work
+- What VAEs are and how they work
+- What diffusion models are and how they work
+- The difference between autoregressive and diffusion generation
+- What Transformers are
+- The relationship between Transformers and LLMs
+- Encoder-only, Encoder-Decoder, and Decoder-only Transformer architectures
+- Why decoder-only Transformers are important for modern LLMs
+- How your existing attention/Transformer knowledge fits into the broader Generative AI ecosystem
 
 ---
 
-## 2. Variational Autoencoders (VAEs)
+# 1. What Is Generative AI?
 
-Variational Autoencoders, introduced by Kingma and Welling (2013), added a probabilistic twist to the standard deterministic autoencoder. Instead of mapping an input to a fixed, discrete vector in the latent space, a VAE maps an input to a *probability distribution* over the latent space.
+**Generative AI** refers to models that learn patterns from data and can generate new content.
 
-### 2.1. Architecture
+The generated content can include:
 
-The VAE consists of three main components:
+- Text
+- Images
+- Audio
+- Video
+- Code
+- 3D content
+- Multimodal content
 
-1.  **Probabilistic Encoder (Recognition Model):** A neural network $q_\phi(z|x)$ that compresses the input $x$ into a latent distribution. It outputs parameters of a probability distribution, typically the mean vector $\mu$ and a diagonal covariance matrix $\Sigma$ (represented as log-variance for numerical stability).
-2.  **Latent Space & Sampling:** We sample a latent vector $z$ from this distribution. 
-3.  **Probabilistic Decoder (Generative Model):** A neural network $p_\theta(x|z)$ that takes the sampled latent vector $z$ and reconstructs the data $x'$.
+A simplified view:
 
 ```text
-========================================================================
-                      VAE Architecture Diagram
-========================================================================
-
-       Input Data (x)
-             |
-    [ Encoder Network ]   <-- Parameters: \phi
-             |
-       +-----+-----+
-       |           |
- Mean (\mu)    Variance (\sigma^2)
-       |           |
-       +-----+-----+
-             |
-      [ Sample z ]        <-- Reparameterization: z = \mu + \sigma \odot \epsilon
-             |
-    [ Decoder Network ]   <-- Parameters: \theta
-             |
-   Reconstructed Data (x')
-========================================================================
+                    Generative AI
+                         │
+        ┌────────────────┼────────────────┐
+        │                │                │
+        ▼                ▼                ▼
+       Text            Images           Audio
+        │                │                │
+        ▼                ▼                ▼
+      LLMs           Diffusion         Generative
+   Transformers       Models             Models
 ```
 
-### 2.2. The Reparameterization Trick
+Generative AI is a broad field.
 
-A critical issue in VAEs is that the sampling step $z \sim \mathcal{N}(\mu, \sigma^2)$ is stochastic and non-differentiable. You cannot backpropagate gradients through a random node.
-The solution is the **Reparameterization Trick**. We express the random variable $z$ as a deterministic transformation of an auxiliary independent random variable $\epsilon$:
-$$ z = \mu + \sigma \odot \epsilon \quad \text{where} \quad \epsilon \sim \mathcal{N}(0, I) $$
-Now, the stochasticity is isolated in $\epsilon$, which has no learnable parameters, and the gradients can flow smoothly backward through $\mu$ and $\sigma$ to update the encoder network.
-
-### 2.3. Mathematical Objective: The ELBO
-
-The true goal is to maximize the marginal likelihood of the data $\log p_\theta(x)$. However, integrating over all possible latent variables $z$ is intractable. 
-Instead, VAEs optimize a tractable lower bound on the data likelihood, called the **Evidence Lower Bound (ELBO)**:
-
-$$ \log p_\theta(x) \ge \text{ELBO} = \mathbb{E}_{z \sim q_\phi(z|x)}[\log p_\theta(x|z)] - D_{KL}(q_\phi(z|x) || p(z)) $$
-
-To train a VAE, we minimize the negative ELBO, which serves as our loss function:
-$$ \mathcal{L}_{\text{VAE}} = \underbrace{-\mathbb{E}_{z \sim q_\phi(z|x)}[\log p_\theta(x|z)]}_{\text{Reconstruction Loss}} + \underbrace{D_{KL}(q_\phi(z|x) || p(z))}_{\text{KL Divergence Regularizer}} $$
-
-*   **Reconstruction Loss:** Ensures the decoder can accurately reconstruct the input from the latent sample. Often implemented as Mean Squared Error (MSE) for continuous data or Binary Cross-Entropy (BCE) for binary data.
-*   **KL Divergence ($D_{KL}$):** Acts as a regularizer. It penalizes the learned latent distribution $q_\phi(z|x)$ from deviating too far from a chosen prior distribution $p(z)$ (almost always a standard standard normal $\mathcal{N}(0, I)$). This forces the latent space to be continuous, smooth, and densely packed, enabling interpolation.
-
-### 2.4. Pros & Cons
-*   **Pros:** 
-    *   Solid, elegant probabilistic foundation.
-    *   Smooth and interpolatable latent space (e.g., you can smoothly morph one face into another).
-    *   Relatively stable training dynamics compared to GANs.
-*   **Cons:** 
-    *   Tends to produce blurry, less sharp images. This is primarily because the MSE reconstruction loss assumes Gaussian noise on the output pixels, which averages over all possible plausible outputs, resulting in a blurry compromise.
+LLMs are one important part of it.
 
 ---
 
-## 3. Generative Adversarial Networks (GANs)
+# 2. Discriminative vs Generative Models
 
-Introduced by Ian Goodfellow et al. in 2014, GANs framed the generative process as a game-theoretic zero-sum game between two competing neural networks. For many years, GANs were the undisputed kings of image generation.
+Before understanding Generative AI, distinguish two broad types of machine learning models.
 
-### 3.1. Architecture
+## 2.1 Discriminative Model
 
-1.  **Generator ($G$):** Takes a random noise vector $z$ (sampled from a simple prior like a Gaussian or Uniform distribution) and maps it to the data space to create a synthetic data sample $G(z)$. Its goal is to create data so realistic that it fools the Discriminator.
-2.  **Discriminator ($D$):** A binary classifier that takes a sample as input (either a real data sample $x$ or a fake sample $G(z)$) and predicts the probability that the sample came from the real training data. Its goal is to be a perfect detective.
+A discriminative model learns to predict a label or output from an input.
+
+For example:
 
 ```text
-========================================================================
-                      GAN Architecture Diagram
-========================================================================
-
- Latent Noise (z)                   Real Data (x)
-        |                                 |
- [ Generator G ]                          |
-        |                                 |
-  Fake Data G(z)                          |
-        |                                 |
-        +---------------+-----------------+
-                        |
-                 [ Discriminator D ]
-                        |
-         Probability Real vs Fake: D(x) / D(G(z))
-========================================================================
+Image
+  ↓
+Classifier
+  ↓
+Cat
 ```
 
-### 3.2. Mathematical Objective: The Minimax Game
+Mathematically, it focuses on something like:
 
-The Generator and Discriminator are trained simultaneously in a minimax game. The value function $V(D, G)$ is defined as:
+\[
+P(y|x)
+\]
 
-$$ \min_G \max_D V(D, G) = \mathbb{E}_{x \sim p_{data}(x)}[\log D(x)] + \mathbb{E}_{z \sim p_z(z)}[\log (1 - D(G(z)))] $$
+For example:
 
-*   **Discriminator Training Phase:** We freeze $G$ and update $D$ to maximize the equation. $D$ wants to output 1 for real data (maximizing $\log D(x)$) and 0 for fake data (maximizing $\log(1 - 0) = 0$). This is equivalent to standard Binary Cross-Entropy loss.
-*   **Generator Training Phase:** We freeze $D$ and update $G$ to minimize the equation. $G$ wants $D$ to output 1 for fake data, thereby minimizing $\log(1 - 1) = -\infty$. 
-*   *Implementation Note:* In practice, minimizing $\log(1 - D(G(z)))$ suffers from vanishing gradients early in training when $D$ easily rejects $G$'s poor initial outputs. Therefore, we usually train $G$ to *maximize* $\log(D(G(z)))$ instead.
+\[
+P(\text{cat}|\text{image})
+\]
 
-### 3.3. Advanced Variations (WGAN)
-Due to severe training instability, researchers developed the Wasserstein GAN (WGAN). It replaces the Jensen-Shannon divergence implicit in standard GANs with the Earth Mover's (Wasserstein) Distance. This provides meaningful gradients to the Generator even when the Discriminator is perfect, drastically improving training stability.
-
-### 3.4. Pros & Cons
-*   **Pros:** 
-    *   Produces incredibly sharp, high-fidelity, and photorealistic images.
-    *   Fast inference time (only a single forward pass through the Generator is needed).
-*   **Cons:**
-    *   **Mode Collapse:** The most notorious GAN failure mode. The generator discovers a small set of outputs (or even just one) that reliably fool the discriminator and stops exploring the latent space. It generates only a specific "mode" (e.g., only generating dogs with open mouths), failing to capture dataset diversity.
-    *   **Training Instability:** The delicate balance between $D$ and $G$ is hard to maintain. If $D$ gets too good too fast, $G$ gets no useful gradients. If $G$ overpowers $D$, it learns nothing meaningful.
+The model is primarily concerned with deciding which output/label is appropriate for a given input.
 
 ---
 
-## 4. Diffusion Models
+## 2.2 Generative Model
 
-Diffusion models (e.g., DDPM, Stable Diffusion, DALL-E 2, Midjourney) represent the current state-of-the-art for visual and audio generation. They are inspired by non-equilibrium thermodynamics and work by slowly destroying data with noise and then learning to reverse the process.
+A generative model learns patterns in a data distribution so that it can generate new samples.
 
-### 4.1. Architecture and Process
-
-Diffusion involves two distinct Markov chains:
-
-1.  **Forward Process (Diffusion / Noising):** A fixed, analytical process (no neural network involved) that gradually adds Gaussian noise to the original data $x_0$ over a series of $T$ timesteps (often $T \approx 1000$).
-    $$ q(x_t | x_{t-1}) = \mathcal{N}(x_t; \sqrt{1 - \beta_t} x_{t-1}, \beta_t I) $$
-    where $\beta_t$ is a predefined variance schedule. By step $T$, the data $x_T$ is entirely indistinguishable from isotropic Gaussian noise.
-
-2.  **Reverse Process (Denoising):** A neural network (almost universally a U-Net architecture with spatial attention) is trained to reverse this process. Starting from pure noise $x_T \sim \mathcal{N}(0, I)$, it sequentially removes noise step-by-step to recover a clean sample $x_0$.
-    $$ p_\theta(x_{t-1} | x_t) = \mathcal{N}(x_{t-1}; \mu_\theta(x_t, t), \Sigma_\theta(x_t, t)) $$
+Conceptually:
 
 ```text
-========================================================================
-                   Diffusion Process Diagram
-========================================================================
-Forward Process (Fixed, adding noise) -> -> -> -> -> -> -> -> -> -> -> ->
-  X_0       X_1       X_2             X_t               X_{T-1}       X_T
- (Image)  (Slightly  (Noisier)      (Noisy)           (Very Noisy)  (Pure 
-           Noisy)                                                    Noise)
-<- <- <- <- <- <- <- <- <- <- <- Reverse Process (Learned U-Net, denoising)
-========================================================================
+Learn data distribution
+        ↓
+Generate new sample
 ```
 
-### 4.2. Mathematical Objective: Denoising Score Matching
-
-While the true derivation involves variational lower bounds on the data likelihood (similar to VAEs), Ho et al. (2020) demonstrated that the objective can be drastically simplified.
-Instead of predicting the exact mean $\mu_\theta$ of the previous step, it is mathematically equivalent and empirically superior to have the neural network predict the *exact noise* $\epsilon$ that was added to the image at timestep $t$.
-
-The simplified loss function is a straightforward Mean Squared Error (MSE):
-
-$$ \mathcal{L}_{\text{simple}} = \mathbb{E}_{t, x_0, \epsilon} \left[ || \epsilon - \epsilon_\theta(\underbrace{\sqrt{\bar{\alpha}_t} x_0 + \sqrt{1 - \bar{\alpha}_t} \epsilon}_{x_t}, t) ||^2 \right] $$
-
-Where:
-*   $\epsilon \sim \mathcal{N}(0, I)$ is the true noise added.
-*   $\epsilon_\theta(x_t, t)$ is the U-Net model predicting the noise given the noisy image and timestep.
-*   $\bar{\alpha}_t$ is a constant derived from the variance schedule $\beta_t$.
-
-### 4.3. Latent Diffusion Models (LDMs)
-Pixel-space diffusion is computationally immense. Stable Diffusion solved this by applying the diffusion process not in pixel space, but in the compressed latent space of a pre-trained VAE. The U-Net denoises the latent vector, which is then decoded by the VAE into an image. This drastically reduced the computational requirements, allowing high-res generation on consumer GPUs.
-
-### 4.4. Pros & Cons
-*   **Pros:** Unmatched generation quality, fine-grained details, and exceptional diversity (covers the whole distribution, no mode collapse). Highly stable training via standard MSE regression.
-*   **Cons:** Very slow inference. Generating a single image requires running the massive U-Net $T$ times sequentially. (Though techniques like DDIM and Latent Consistency Models are reducing this to 1-4 steps).
-
----
-
-## 5. Transformers (for Generative Tasks)
-
-Originally introduced in "Attention Is All You Need" (Vaswani et al., 2017) for machine translation, the Transformer architecture has entirely consumed Natural Language Processing (NLP) and is the engine behind LLMs like GPT-4, Claude, and LLaMA.
-
-### 5.1. Architecture
-
-The defining feature of the Transformer is the **Self-Attention Mechanism**. Unlike RNNs/LSTMs which process data sequentially, self-attention processes the entire sequence simultaneously, allowing the model to weigh the importance of all other tokens when processing a specific token, establishing infinite-range dependencies in $O(1)$ sequential operations.
-
-For generative text (Autoregressive LLMs), the **Decoder-Only Transformer** architecture is used.
-
-1.  **Embedding & Positional Encoding:** Input text is tokenized and mapped to dense continuous vectors (embeddings). Because Transformers process everything in parallel, they have no inherent sense of sequence order. Positional encodings (either absolute sine/cosine waves or learned embeddings, like RoPE) are added to inject sequence position information.
-2.  **Masked Multi-Head Self-Attention:** 
-    *   Input embeddings are linearly projected into Queries ($Q$), Keys ($K$), and Values ($V$).
-    *   Attention = $\text{softmax}(\frac{QK^T}{\sqrt{d_k}})V$.
-    *   **Masking:** A lower-triangular causal mask is applied before the softmax. This sets the attention weights for future tokens to $-\infty$, ensuring that when predicting token $t$, the model can only "look at" tokens $<t$.
-3.  **Feed-Forward Network (FFN):** A two-layer MLP applied independently and identically to each token position's representation.
-4.  **Residuals & LayerNorm:** Extensive use of residual connections and Layer Normalization ensures stable gradient flow through hundreds of layers.
+For example:
 
 ```text
-========================================================================
-                Decoder-Only Transformer Block Diagram
-========================================================================
-             Input Tokens (e.g., "The", "cat", "sat")
-                               |
-               [ Token Embeddings + Positional Encodings ]
-                               |
-       +-----------------------+-----------------------+
-       |                                               |
-       |             [ Query, Key, Value Projections ] |
-       |                               |               |
-       |       [ Masked Multi-Head Self-Attention ]    |
-       |                               |               |
-       +-----> [ Add & Layer Normalization ] <---------+
-                               |
-       +-----------------------+-----------------------+
-       |                                               |
-       |           [ Feed Forward Network (MLP) ]      |
-       |                                               |
-       +-----> [ Add & Layer Normalization ] <---------+
-                               |
-                  [ Linear Projection to Vocabulary Size ]
-                               |
-                          [ Softmax ]
-                               |
-             Next Token Probabilities (e.g., "on": 85%)
-========================================================================
+Random noise / latent representation
+        ↓
+Generative model
+        ↓
+New image
 ```
 
-### 5.2. Mathematical Objective: Autoregressive Next-Token Prediction
-
-Transformers for generative text are trained using **Autoregressive Next-Token Prediction** (also known as Causal Language Modeling). Given a sequence of tokens $x_1, ..., x_{t-1}$, the goal is to predict the correct next token $x_t$. 
-
-The objective function is the standard **Cross-Entropy Loss** calculated over the entire sequence:
-
-$$ \mathcal{L}_{\text{CE}} = -\sum_{t=1}^{T} \log P_\theta(x_t | x_{<t}) $$
-
-This objective is remarkably simple yet incredibly powerful. By simply learning to predict the next word over trillions of tokens of internet data, the model is forced to implicitly learn syntax, facts, reasoning, and world models.
-
-### 5.3. Pros & Cons
-*   **Pros:** 
-    *   **The Scaling Laws:** Transformers scale phenomenally. Performance predictably improves with more parameters, more data, and more compute.
-    *   Unparalleled performance on discrete, sequential data (text, code, DNA).
-    *   Highly parallelizable training.
-*   **Cons:** 
-    *   **Quadratic Complexity:** Self-attention has a time and memory complexity of $O(N^2)$ with respect to sequence length $N$. This makes scaling to very long context windows (e.g., 1 million tokens) mathematically challenging and memory-intensive (though techniques like Ring Attention help).
-    *   **Inference Latency:** While training is parallel, generation is strictly sequential token-by-token, leading to high latency.
+This distinction is useful as a first mental model, although real-world models can have more complicated objectives.
 
 ---
 
-## 6. Comparing Architectures: The Paradigm Winners
+# 3. The Generative AI Family
 
-A frequent and high-signal interview topic is discussing *why* specific architectures became the dominant paradigm for specific data modalities.
+Important generative architectures include:
 
-### 6.1. Why Transformers Won for Text
-1.  **Discrete Nature of Text:** Text consists of discrete, categorical tokens drawn from a finite vocabulary. The Cross-Entropy classification objective of Transformers maps perfectly to this. Continuous models like Diffusion or standard GANs struggle to generate discrete, hard tokens directly without complex argmax approximations (like Gumbel-Softmax) which break easily.
-2.  **Context and Sequence:** Human language relies completely on sequential ordering and long-range semantic dependencies (a pronoun at the end of a book referring to a character in chapter 1). The Transformer's self-attention routes information across the whole context window natively.
-3.  **Predictable Scaling:** Transformers exhibit strong empirical "Scaling Laws." The industry learned that simply making the model and dataset bigger reliably results in better reasoning capabilities, validating massive investments.
+```text
+Generative AI
+│
+├── Autoregressive Models
+│      │
+│      └── Transformers
+│             │
+│             └── LLMs
+│
+├── GANs
+│
+├── VAEs
+│
+└── Diffusion Models
+```
 
-### 6.2. Why Diffusion Won for Images
-1.  **Continuous High-Dimensional Space:** Images are dense grids of continuous RGB values. The process of adding and predicting continuous Gaussian noise maps elegantly and natively to this continuous vector space. 
-2.  **Stability vs. GANs:** While GANs produce sharp images, their adversarial training is a delicate, notoriously unstable balancing act, and they suffer from mode collapse. Diffusion models optimize a straightforward regression objective (predicting noise via MSE) which is highly stable, doesn't require balancing two networks, and reliably covers the *entire* distribution of the training data.
-3.  **Spatial Holism:** While autoregressive models (like applying a Transformer to image patches) must generate an image sequentially top-left to bottom-right, Diffusion models refine the *entire* image globally at once, moving from noise to signal. This global refinement naturally produces better overall structural coherence.
+There are also hybrid and newer architectures.
+
+For this roadmap, the goal is to understand the major families and then go deeply into Transformers and LLMs.
 
 ---
 
-## 7. Typical Interview Questions
+# 4. Autoregressive Models
 
-Below are standard, high-frequency interview questions you should be prepared to answer based on this lesson. Ensure you can answer these clearly and concisely.
+You already encountered this in Lesson 01.
 
-**Q1: Explain the Reparameterization Trick in VAEs and explain why it is absolutely necessary for training.**
-*   **Answer:** In a VAE, the encoder outputs $\mu$ and $\sigma$, and we must sample a latent vector $z \sim \mathcal{N}(\mu, \sigma^2)$. We need to backpropagate the reconstruction loss through this sampling step to update the encoder. However, standard sampling is a stochastic, non-differentiable operation. The reparameterization trick rewrites the sample deterministically as $z = \mu + \sigma \odot \epsilon$, where $\epsilon \sim \mathcal{N}(0, I)$. The randomness is pushed to $\epsilon$ (which has no parameters), allowing gradients to flow backwards smoothly through the deterministic addition and multiplication operations to $\mu$ and $\sigma$.
+An autoregressive model generates one element at a time based on previous elements.
 
-**Q2: What is Mode Collapse in GANs, and how can it be mitigated?**
-*   **Answer:** Mode collapse happens when the Generator learns to map many different input noise vectors $z$ to a single output (or a small set of outputs) that successfully fools the Discriminator. It abandons exploring the full distribution, generating only one "mode" (e.g., only generating one specific looking face). It can be mitigated by using Wasserstein GANs (WGAN) which provide smoother gradients, Unrolled GANs, or by incorporating Minibatch Discrimination where the discriminator looks at a batch of generated images to ensure diversity.
+For language:
 
-**Q3: Walk me through the mathematical objective of a Diffusion model during training.**
-*   **Answer:** While derived from variational bounds, the actual training objective is simplified Denoising Score Matching. We take an image $x_0$, sample a random timestep $t$, and analytically add noise $\epsilon$ to create noisy image $x_t$. We pass $x_t$ and $t$ into a U-Net. The U-Net's job is not to predict the original image, but to predict the *noise* $\epsilon$ that was added. The loss function is a simple Mean Squared Error: $\mathbb{E}_{t, x_0, \epsilon} [ || \epsilon - \epsilon_\theta(x_t, t) ||^2 ]$.
+```text
+The
+ ↓
+The cat
+ ↓
+The cat is
+ ↓
+The cat is sleeping
+```
 
-**Q4: Compare the loss functions and training dynamics of GANs and Diffusion models.**
-*   **Answer:** GANs use an adversarial Minimax loss, framing training as a zero-sum game between a Generator and Discriminator. This requires carefully balancing the learning rates of both networks and is highly unstable, often suffering from vanishing gradients or mode collapse. Diffusion models use a standard MSE regression loss to predict noise. Because it's a simple supervised regression task, training is vastly more stable, predictable, and does not suffer from mode collapse, though inference is slower.
+Mathematically:
 
-**Q5: How does the Masked Self-Attention mechanism ensure the autoregressive property in GPT models?**
-*   **Answer:** During training, we process the entire input sequence in parallel for hardware efficiency. However, a generative model must learn to predict the *next* token based only on *past* tokens. Masked self-attention applies a causal, lower-triangular mask to the attention score matrix ($QK^T$) before the softmax operation. It sets all values above the diagonal (representing future tokens) to $-\infty$. When softmax is applied, these become 0, mathematically preventing information from future tokens from leaking into the representation of the current token.
+\[
+P(x_1,x_2,\ldots,x_n)
+=
+\prod_{t=1}^{n}
+P(x_t|x_{<t})
+\]
 
-**Q6: Why is self-attention $O(N^2)$ in complexity, and what problem does this cause?**
-*   **Answer:** In self-attention, every token in a sequence of length $N$ must compute an attention score with every other token in the sequence. This results in an $N \times N$ attention matrix, leading to time and memory complexity of $O(N^2)$. This causes severe bottlenecks when scaling to very long context windows (e.g., trying to process an entire book at once), as memory requirements grow quadratically and quickly exceed GPU VRAM limits.
+This is the fundamental generation mechanism behind GPT-style LLMs.
 
-**Q7: Explain the purpose of the KL Divergence term in the VAE loss function.**
-*   **Answer:** The ELBO loss has two parts: Reconstruction loss and KL Divergence. The KL divergence acts as a crucial regularizer. It penalizes the learned latent distribution $q_\phi(z|x)$ from deviating from a standard normal prior $p(z) = \mathcal{N}(0, I)$. Without it, the network would just memorize the training data, mapping each image to a tiny, isolated point in latent space (zero variance) to minimize reconstruction loss. The KL term forces the latent distributions to overlap and follow a standard Gaussian shape, creating a continuous, smooth, and meaningful latent space necessary for generation and interpolation.
+---
+
+# 5. Transformers
+
+Transformers are neural-network architectures designed to model relationships between elements in sequences using attention mechanisms.
+
+You already studied the original Transformer:
+
+```text
+             Transformer
+                 │
+        ┌────────┴────────┐
+        ▼                 ▼
+     Encoder            Decoder
+        │                 │
+ Self-Attention     Masked Self-Attention
+                          │
+                   Cross-Attention
+```
+
+Modern LLMs commonly use a decoder-only Transformer:
+
+```text
+             Decoder-Only Transformer
+                       │
+                       ▼
+                Causal Attention
+                       │
+                       ▼
+                      FFN
+                       │
+                       ▼
+                   Repeat
+                       │
+                       ▼
+                 Next Token
+```
+
+---
+
+# 6. Why Transformers Work Well for Language
+
+Language contains relationships between tokens that may be far apart.
+
+For example:
+
+```text
+The scientist who studied the disease for many years
+finally published her research.
+```
+
+The model needs to represent relationships between tokens such as:
+
+```text
+scientist
+    ↕
+her
+```
+
+and many other relationships.
+
+Self-attention allows each token representation to incorporate information from other relevant tokens.
+
+You already know the core equation:
+
+\[
+Attention(Q,K,V)
+=
+softmax
+\left(
+\frac{QK^T}{\sqrt{d_k}}
+\right)V
+\]
+
+This mechanism is one of the foundations of modern LLMs.
+
+---
+
+# 7. GANs
+
+**GAN = Generative Adversarial Network**
+
+A GAN contains two neural networks:
+
+```text
+             GAN
+              │
+       ┌──────┴──────┐
+       ▼             ▼
+   Generator     Discriminator
+```
+
+They have competing objectives.
+
+---
+
+# 8. Generator
+
+The generator creates synthetic samples.
+
+For example:
+
+```text
+Random noise
+     ↓
+Generator
+     ↓
+Generated image
+```
+
+The goal is to generate samples that look similar to real data.
+
+---
+
+# 9. Discriminator
+
+The discriminator tries to distinguish between real and generated samples.
+
+```text
+Real image ───────┐
+                  ▼
+             Discriminator
+                  │
+Generated image ──┘
+                  ↓
+             Real / Fake
+```
+
+Conceptually:
+
+```text
+Generator:
+"Create something realistic."
+
+Discriminator:
+"Determine whether it is real."
+```
+
+---
+
+# 10. GAN Training
+
+The generator tries to fool the discriminator.
+
+The discriminator tries not to be fooled.
+
+Conceptually:
+
+```text
+Generator
+    ↓
+Fake samples
+    ↓
+Discriminator
+    ↓
+Feedback
+    ↓
+Generator improves
+    ↓
+Better fake samples
+    ↓
+Discriminator improves
+    ↓
+...
+```
+
+This is called **adversarial training**.
+
+---
+
+# 11. Why GANs Were Important
+
+GANs demonstrated that neural networks could generate highly realistic synthetic data.
+
+They became particularly important for:
+
+- Image generation
+- Image manipulation
+- Super-resolution
+- Style transfer
+- Synthetic data
+
+However, GAN training can be difficult.
+
+Common issues include:
+
+- Mode collapse
+- Training instability
+- Generator/discriminator imbalance
+- Difficult optimization
+
+These limitations contributed to the rise of other generative approaches.
+
+---
+
+# 12. Variational Autoencoders
+
+**VAE = Variational Autoencoder**
+
+A VAE uses an encoder-decoder architecture and learns a probabilistic latent representation.
+
+```text
+             VAE
+              │
+        ┌─────┴─────┐
+        ▼           ▼
+     Encoder      Decoder
+        │           ▲
+        ▼           │
+      Latent ───────┘
+      Space
+```
+
+The key idea is:
+
+> Learn a useful probabilistic latent representation of the data.
+
+---
+
+# 13. VAE Encoder
+
+Suppose we have an image:
+
+```text
+Image
+ ↓
+Encoder
+ ↓
+Latent representation
+```
+
+Instead of simply mapping the image to one deterministic point, a VAE learns parameters describing a probability distribution.
+
+Typically:
+
+\[
+\mu
+\]
+
+and
+
+\[
+\sigma
+\]
+
+describe the latent distribution.
+
+---
+
+# 14. Latent Space
+
+The model represents data in a lower-dimensional latent space.
+
+Conceptually:
+
+```text
+Images
+   ↓
+Encoder
+   ↓
+Latent Space
+```
+
+You can imagine different samples occupying different regions:
+
+```text
+      Cat ●
+
+                 ● Dog
+
+
+  ● Car
+
+          ● Bird
+```
+
+The VAE attempts to learn a structured and smooth latent representation.
+
+---
+
+# 15. VAE Decoder
+
+The decoder takes a latent representation and reconstructs or generates data.
+
+```text
+Latent vector
+      ↓
+   Decoder
+      ↓
+Generated image
+```
+
+The overall idea is:
+
+```text
+Image
+ ↓
+Encoder
+ ↓
+Latent representation
+ ↓
+Decoder
+ ↓
+Reconstructed image
+```
+
+---
+
+# 16. Why Is It Called "Variational"?
+
+A VAE learns a probability distribution over latent representations rather than simply learning a deterministic encoding.
+
+Its training objective has two major components.
+
+## Reconstruction Loss
+
+Encourage the output to resemble the original input.
+
+## KL Divergence
+
+Regularize the latent distribution toward a prior, commonly:
+
+\[
+N(0,I)
+\]
+
+A simplified objective is:
+
+\[
+\boxed{
+L =
+L_{reconstruction}
++
+\beta L_{KL}
+}
+\]
+
+This helps create a useful latent space from which new samples can be generated.
+
+---
+
+# 17. GAN vs VAE
+
+| | GAN | VAE |
+|---|---|---|
+| Main components | Generator + Discriminator | Encoder + Decoder |
+| Latent representation | Yes | Yes |
+| Training | Adversarial | Reconstruction + KL |
+| Training stability | Can be difficult | Generally more stable |
+| Image sharpness | Historically strong | Can be smoother/blurrer |
+| Latent regularization | Less explicit | Explicit |
+
+These are broad conceptual comparisons rather than universal rules for every implementation.
+
+---
+
+# 18. Diffusion Models
+
+Diffusion models are another major family of generative models.
+
+The central idea is:
+
+> Start with clean data, progressively add noise, and train a model to reverse the process.
+
+For example:
+
+```text
+Clean Image
+     ↓
+Add noise
+     ↓
+Noisier image
+     ↓
+Add more noise
+     ↓
+More noise
+     ↓
+...
+     ↓
+Almost pure noise
+```
+
+---
+
+# 19. Forward Diffusion
+
+The forward process gradually corrupts the original data.
+
+Conceptually:
+
+```text
+x₀
+ ↓
+x₁
+ ↓
+x₂
+ ↓
+x₃
+ ↓
+...
+ ↓
+xₜ ≈ noise
+```
+
+The standard forward noise process is generally fixed rather than learned.
+
+---
+
+# 20. Reverse Diffusion
+
+The model learns to reverse the corruption process.
+
+```text
+Random noise
+     ↓
+Denoising step
+     ↓
+Less noise
+     ↓
+Denoising step
+     ↓
+Less noise
+     ↓
+...
+     ↓
+Generated image
+```
+
+So:
+
+```text
+Noise
+ ↓
+Denoise
+ ↓
+Denoise
+ ↓
+Denoise
+ ↓
+Image
+```
+
+---
+
+# 21. What Does a Diffusion Model Learn?
+
+A common diffusion formulation trains a neural network to predict the noise added to a sample.
+
+Conceptually:
+
+```text
+Clean image
+     ↓
+Add known noise
+     ↓
+Noisy image
+     ↓
+Neural network
+     ↓
+Predict noise
+     ↓
+Compare predicted vs actual noise
+     ↓
+Loss
+```
+
+The network learns how to estimate the corruption so that generation can move in the opposite direction.
+
+---
+
+# 22. Why Does Denoising Generate an Image?
+
+During generation, we begin with random noise.
+
+The learned model repeatedly transforms the noisy sample toward the learned data distribution.
+
+```text
+Random noise
+     ↓
+Remove noise
+     ↓
+Remove noise
+     ↓
+Remove noise
+     ↓
+...
+     ↓
+Image-like sample
+```
+
+The result is a newly generated sample.
+
+---
+
+# 23. Text Conditioning in Diffusion Models
+
+Modern text-to-image systems can condition generation on a text prompt.
+
+Conceptually:
+
+```text
+Text prompt
+    ↓
+Text representation
+    ↓
+Conditioning information
+    ↓
+Diffusion model
+    ↑
+    │
+Random noise
+    ↓
+Generated image
+```
+
+The exact architecture differs between models.
+
+Attention and cross-attention can be used to connect text conditioning with the generative process.
+
+You already understand cross-attention:
+
+```text
+Q = one representation
+K,V = another representation
+```
+
+---
+
+# 24. Autoregressive vs Diffusion Generation
+
+This is one of the most important comparisons.
+
+## Autoregressive Generation
+
+Used by LLMs:
+
+```text
+Token
+ ↓
+Next token
+ ↓
+Next token
+ ↓
+Next token
+```
+
+The model generates a sequence progressively.
+
+---
+
+## Diffusion Generation
+
+Used in many image/audio/video generation systems:
+
+```text
+Noise
+ ↓
+Denoising
+ ↓
+Denoising
+ ↓
+Denoising
+ ↓
+Generated sample
+```
+
+The model starts from noise and iteratively refines it.
+
+---
+
+# 25. LLM vs Diffusion Model
+
+For a language model:
+
+```text
+Prompt
+ ↓
+Token
+ ↓
+Token
+ ↓
+Token
+ ↓
+...
+```
+
+For a diffusion image model:
+
+```text
+Noise
+ ↓
+Denoising
+ ↓
+Denoising
+ ↓
+Denoising
+ ↓
+Image
+```
+
+The generation mechanism is fundamentally different.
+
+---
+
+# 26. Transformers Are Not the Same as LLMs
+
+This distinction is important.
+
+A **Transformer** is an architecture.
+
+An **LLM** is a large language model, commonly implemented using a Transformer architecture.
+
+Think of:
+
+```text
+Transformer
+    │
+    ├── Encoder-only
+    │
+    ├── Encoder-Decoder
+    │
+    └── Decoder-only
+```
+
+Different Transformer architectures can be used for different tasks.
+
+---
+
+# 27. Encoder-Only Transformers
+
+Structure:
+
+```text
+Input
+ ↓
+Encoder
+ ↓
+Contextual representation
+```
+
+Examples include BERT-style models.
+
+Typical uses:
+
+- Classification
+- Token classification
+- Representation learning
+- Embeddings
+- Understanding tasks
+
+---
+
+# 28. Encoder-Decoder Transformers
+
+Structure:
+
+```text
+Source
+ ↓
+Encoder
+ ↓
+Encoder representations
+ ↓
+Decoder
+ ↓
+Output
+```
+
+The decoder uses cross-attention to access encoder information.
+
+Conceptually:
+
+```text
+Q = Decoder
+K,V = Encoder
+```
+
+This is the architecture you already studied.
+
+Typical uses:
+
+- Translation
+- Summarization
+- Sequence-to-sequence tasks
+
+---
+
+# 29. Decoder-Only Transformers
+
+Structure:
+
+```text
+Prompt
+ ↓
+Causal Transformer
+ ↓
+Next token
+ ↓
+Next token
+ ↓
+Next token
+```
+
+This is the architecture used by many modern general-purpose LLMs.
+
+Examples of model families using this general paradigm include:
+
+- GPT-style models
+- Llama-style models
+- Qwen-style models
+- Many other causal language models
+
+---
+
+# 30. Why Decoder-Only Transformers Matter for LLMs
+
+A decoder-only model can perform autoregressive language generation naturally.
+
+For example:
+
+```text
+The capital of France is
+                       ↓
+                    Paris
+```
+
+Then:
+
+```text
+The capital of France is Paris
+                              ↓
+                         <EOS>
+```
+
+The model repeatedly predicts the next token.
+
+This is why causal self-attention is central to modern LLMs.
+
+---
+
+# 31. The Transformer Family
+
+You should now have this conceptual map:
+
+```text
+                         Transformer
+                              │
+              ┌───────────────┼───────────────┐
+              │               │               │
+              ▼               ▼               ▼
+         Encoder-only   Encoder-Decoder   Decoder-only
+              │               │               │
+            BERT             T5            GPT-style
+                                              │
+                                              ▼
+                                             LLM
+```
+
+This is a simplified map; actual model families and architectures can be more complex.
+
+---
+
+# 32. The Larger Generative AI Family Tree
+
+You should now have this mental model:
+
+```text
+                         GENERATIVE AI
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        │                     │                     │
+        ▼                     ▼                     ▼
+       GANs                   VAEs              Diffusion
+        │                     │                     │
+        └─────────────────────┼─────────────────────┘
+                              │
+                    Autoregressive Models
+                              │
+                              ▼
+                         Transformers
+                              │
+              ┌───────────────┼───────────────┐
+              │               │               │
+              ▼               ▼               ▼
+         Encoder-only   Encoder-Decoder   Decoder-only
+              │               │               │
+            BERT             T5            GPT/Llama
+                                              │
+                                              ▼
+                                             LLMs
+```
+
+This is a conceptual taxonomy. Modern systems can combine multiple ideas.
+
+---
+
+# 33. Where Does Multimodal AI Fit?
+
+Modern generative systems increasingly combine multiple modalities.
+
+```text
+                    Multimodal AI
+                         │
+        ┌────────────────┼────────────────┐
+        │                │                │
+       Text            Image            Audio
+        │                │                │
+        └────────────────┼────────────────┘
+                         │
+                         ▼
+                  Multimodal Model
+```
+
+Examples of multimodal generation include:
+
+```text
+Text
+ ↓
+Image generation
+```
+
+```text
+Text
+ ↓
+Video generation
+```
+
+```text
+Image + Text
+ ↓
+Multimodal LLM
+ ↓
+Text response
+```
+
+Different systems use different combinations of encoders, Transformers, diffusion components, and other architectures.
+
+---
+
+# 34. How Your Existing Knowledge Fits
+
+You have already learned:
+
+```text
+RNN
+ ↓
+LSTM
+ ↓
+GRU
+ ↓
+Encoder-Decoder
+ ↓
+Bahdanau Attention
+ ↓
+Luong Attention
+ ↓
+Self-Attention
+ ↓
+Q/K/V
+ ↓
+Multi-Head Attention
+ ↓
+Masked Attention
+ ↓
+Cross-Attention
+ ↓
+Transformer
+```
+
+Now place that knowledge into the larger Generative AI picture:
+
+```text
+Generative AI
+      │
+      ▼
+Sequence Generation
+      │
+      ▼
+Transformers
+      │
+      ▼
+Decoder-only Transformers
+      │
+      ▼
+LLMs
+```
+
+Your previous attention lessons are therefore the architectural foundation for understanding modern LLMs.
+
+---
+
+# 35. High-Level Comparison
+
+| Architecture | Main generation mechanism | Common applications |
+|---|---|---|
+| GAN | Generator vs discriminator | Image synthesis, manipulation |
+| VAE | Latent sampling + decoder | Representation learning, generation |
+| Diffusion | Iterative denoising | Image, audio, video generation |
+| Autoregressive Transformer | Sequential prediction | Text/code generation |
+| Decoder-only Transformer | Next-token prediction | Modern LLMs |
+| Encoder-Decoder Transformer | Sequence-to-sequence transformation | Translation, summarization |
+
+---
+
+# 36. What You Need to Learn Deeply
+
+Because this roadmap is specifically about LLMs, do not spend equal time on every Generative AI architecture.
+
+## Deep Understanding
+
+You need:
+
+```text
+Transformers
+     ↓
+Decoder-only architecture
+     ↓
+LLMs
+```
+
+## Conceptual Understanding
+
+You need:
+
+```text
+GANs
+VAEs
+Diffusion
+```
+
+For each, understand:
+
+- What problem it solves
+- Basic architecture
+- Training principle
+- Generation mechanism
+- Strengths/limitations
+- Difference from autoregressive LLMs
+
+You do not need to derive every GAN/VAE/diffusion equation for this roadmap.
+
+---
+
+# 37. Important AI Engineer Distinction
+
+Do not confuse these terms.
+
+## Generative AI
+
+A broad field involving models capable of generating new content.
+
+## Transformer
+
+A neural-network architecture based heavily on attention mechanisms.
+
+## LLM
+
+A large language model, commonly implemented using a Transformer.
+
+A useful conceptual picture is:
+
+```text
+Generative AI
+      │
+      ├── Diffusion
+      │
+      ├── GAN
+      │
+      ├── VAE
+      │
+      └── Autoregressive models
+                │
+                └── Transformers
+                        │
+                        └── LLMs
+```
+
+---
+
+# 38. Key Concepts to Remember
+
+### Generative AI
+
+Models that generate new content from learned patterns/distributions.
+
+### GAN
+
+```text
+Generator ↔ Discriminator
+```
+
+### VAE
+
+```text
+Data → Encoder → Latent → Decoder
+```
+
+### Diffusion
+
+```text
+Data → Noise
+Noise → Iterative denoising → Generated data
+```
+
+### Transformer
+
+Attention-based architecture for sequence modeling.
+
+### LLM
+
+A large language model, commonly based on a Transformer.
+
+### Autoregressive generation
+
+```text
+Previous tokens
+      ↓
+Next token
+      ↓
+Append
+      ↓
+Next token
+```
+
+---
+
+# 39. Final Mental Model
+
+```text
+                    GENERATIVE AI
+                         │
+          ┌──────────────┼──────────────┐
+          │              │              │
+          ▼              ▼              ▼
+         GAN             VAE        Diffusion
+                                         │
+                                         │
+          ┌──────────────────────────────┘
+          │
+          ▼
+   Autoregressive Generation
+          │
+          ▼
+      Transformer
+          │
+     ┌────┴────┐
+     │         │
+ Encoder    Decoder
+             │
+             ▼
+       Decoder-only
+             │
+             ▼
+            LLM
+             │
+             ▼
+     Next-token prediction
+             │
+             ▼
+        Text generation
+```
+
+---
+
+# 40. Self-Check Questions
+
+Before moving to Lesson 03, you should be able to answer:
+
+1. What is Generative AI?
+2. What is the difference between generative and discriminative models?
+3. What is a GAN?
+4. What are the generator and discriminator?
+5. What is a VAE?
+6. What is latent space?
+7. What is the basic idea behind diffusion?
+8. What is the difference between autoregressive generation and diffusion generation?
+9. Is a Transformer the same thing as an LLM?
+10. What is the difference between encoder-only, encoder-decoder, and decoder-only Transformers?
+11. Why are decoder-only Transformers important for modern LLMs?
+12. Where do LLMs fit inside the larger Generative AI ecosystem?
+
+---
+
+# 41. Roadmap Progress
+
+```text
+PHASE 1 — LLM FOUNDATIONS
+
+01. What Are LLMs?                   ✅
+        ↓
+02. Generative AI: The Big Picture   ✅
+        ↓
+03. Tokenization Deep Dive
+        ↓
+04. Embeddings & Token Representations
+
+PHASE 2 — MODERN LLM ARCHITECTURE
+
+05. LLM Architecture Internals
+06. Positional Encodings
+07. Mixture of Experts
+08. Context Window & Attention Patterns
+
+PHASE 3 — LLM TRAINING & GENERATION
+
+09. Pre-training Objectives
+10. Logits, Softmax & Temperature
+11. Sampling Strategies
+12. Multi-turn Conversations & Memory
+```
+
+## Next Lesson
+
+**Lesson 03 — Tokenization Deep Dive**
+
+Topics:
+
+- Character vs word vs subword tokenization
+- BPE
+- WordPiece
+- SentencePiece
+- Byte-level tokenization
+- Vocabulary
+- Token IDs
+- Special tokens
+- BOS/EOS/PAD/UNK/MASK
+- Padding
+- Truncation
+- Attention masks
+- Hugging Face tokenizers
