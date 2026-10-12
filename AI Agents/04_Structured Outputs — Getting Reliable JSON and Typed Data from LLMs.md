@@ -44,7 +44,88 @@ $$\mathbf{\text{Structural Guarantee } \checkmark \quad \text{vs.} \quad \text{S
 
 ---
 
-## 2. Walkthrough: One Messy Blurb into Typed Data
+## 2. Core Concepts & Terminology: Demystifying the Terms
+
+Before diving deeper, it is critical to understand the distinction between these four closely related terms:
+
+```
+[Developer writes] ──> Pydantic Schema (Python class with type hints)
+                              │
+                              ▼ (Auto-converted)
+[API receives]     ──> JSON Schema (Universal JSON specification)
+                              │
+                              ▼ (Constrains generation)
+[LLM executes]     ──> Structured Output (Constrained token decoding)
+                              │
+                              ▼ (Parsed back into)
+[Code consumes]    ──> Typed Pydantic Object (Validated Python instance)
+```
+
+### 1. What is a Schema? (The Blueprint)
+A **Schema** is a generic concept: it is an **abstract blueprint or contract** that defines how data must be organized.
+* It defines what field names/keys must exist.
+* It defines the allowed data types (e.g., string, integer, boolean).
+* It defines constraints and rules (e.g., minimum values, regex patterns).
+* 💡 *Analogy*: An empty physical job application form. It requires you to fill in your name (letters only), age (number only), and email.
+
+---
+
+### 2. What is a JSON Schema? (The Universal Standard)
+A **JSON Schema** is a formal, standardized specification written in JSON that defines the structure and validation rules for JSON documents.
+* It is provider-agnostic and language-agnostic.
+* Every major AI provider (OpenAI, Anthropic, Google Gemini) uses **JSON Schema** as the universal format to define tool parameters and structured output contracts.
+* *Example*:
+  ```json
+  {
+    "type": "object",
+    "properties": {
+      "name": { "type": "string", "description": "User's full name" },
+      "age": { "type": "integer", "minimum": 18 },
+      "is_active": { "type": "boolean" }
+    },
+    "required": ["name", "age"],
+    "additionalProperties": false
+  }
+  ```
+
+---
+
+### 3. What is a Pydantic Schema? (The Python Developer's Tool)
+A **Pydantic Schema** is a Python class inheriting from `pydantic.BaseModel` that defines your data structure using native Python type hints.
+* Instead of writing verbose JSON Schemas manually, developers write clean Python code.
+* Pydantic automatically converts your Python model into a JSON Schema via `.model_json_schema()`.
+* When the LLM responds, Pydantic validates the JSON and instantiates a typed Python object (`Product.model_validate_json(...)`).
+* *Example*:
+  ```python
+  from pydantic import BaseModel, Field
+
+  class User(BaseModel):
+    name: str = Field(description="User's full name")
+    age: int = Field(ge=18, description="Age, must be at least 18")
+    is_active: bool = True
+  ```
+
+---
+
+### 4. What is Structured Output? (The LLM Feature)
+**Structured Output** is a capability provided by LLM inference engines where the model is **mechanically constrained at token-generation time** to emit text that 100% conforms to a given JSON Schema.
+* **Prompt pleading (Old way)**: *"Please reply in valid JSON with keys 'name' and 'age'"* $\rightarrow$ The model often adds markdown backticks, hallucinates keys, or returns invalid syntax.
+* **Structured Output (Modern way)**: The API engine uses **grammar-based constrained decoding**. The token sampler masks out any tokens that would violate the schema grammar. The model physically cannot emit invalid JSON or the wrong keys.
+
+---
+
+### Summary Table
+
+| Term | What It Is | Who Uses It | Key Purpose |
+| :--- | :--- | :--- | :--- |
+| **Schema** | Abstract concept of a data contract | Computer Science & DBs | Defines structure and rules |
+| **JSON Schema** | Standardized JSON document defining a contract | APIs, LLM Engines | Universal machine-readable format |
+| **Pydantic Schema** | Python class (`BaseModel`) with type annotations | Python Developers | Clean authoring + runtime validation |
+| **Structured Output** | LLM inference feature enforcing exact schema match | LLM Provider APIs | Guarantees 100% schema compliance |
+
+---
+
+## 3. Walkthrough: One Messy Blurb into Typed Data
 
 **Input Blurb**:
 > *"The AeroPress Go is just \$29.99 and yes, it's in stock!"*
